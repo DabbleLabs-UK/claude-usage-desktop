@@ -26,26 +26,21 @@
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
       background: var(--bg);
       color: var(--text);
-      min-height: 100vh;
+      height: 100vh;
+      overflow: hidden;
       display: flex;
       flex-direction: column;
     }
 
-    header {
-      padding: 14px 16px 12px;
+    /* Bottom toolbar -- holds status text + gear, no title */
+    .toolbar {
+      padding: 10px 16px;
       background: var(--surface);
-      border-bottom: 1px solid var(--border);
+      border-top: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-shrink: 0;
-    }
-
-    h1 {
-      font-size: 1rem;
-      font-weight: 700;
-      color: var(--accent);
-      letter-spacing: -0.01em;
     }
 
     .meta {
@@ -57,7 +52,7 @@
     .meta-text {
       display: flex;
       flex-direction: column;
-      align-items: flex-end;
+      align-items: flex-start;
       gap: 3px;
     }
 
@@ -317,28 +312,9 @@
       text-align: center;
       min-height: 1.2em;
     }
-
-    footer {
-      text-align: center;
-      padding: 8px;
-      font-size: 0.62rem;
-      color: #2a2a45;
-      flex-shrink: 0;
-    }
   </style>
 </head>
 <body>
-
-<header>
-  <h1>Claude Usage</h1>
-  <div class="meta">
-    <div class="meta-text">
-      <span class="updated" id="updatedEl">--</span>
-      <span class="stale" id="staleEl">Stale</span>
-    </div>
-    <button class="gear-btn" onclick="openSettings()" title="Settings">&#9881;</button>
-  </div>
-</header>
 
 <main id="mainView">
   <div class="loading">Loading...</div>
@@ -346,8 +322,8 @@
 
 <div id="settingsView" class="settings-view hidden">
   <div class="settings-header">
+    <button class="back-btn" onclick="closeSettings()">&#8592; Back</button>
     <span class="settings-title">Settings</span>
-    <button class="back-btn" onclick="closeSettings()">Done</button>
   </div>
 
   <div class="setting-card">
@@ -377,7 +353,16 @@
   <div id="saveMsg" class="save-msg"></div>
 </div>
 
-<footer>Claude Usage Monitor</footer>
+<!-- bottom toolbar: status text on left, gear on right, no title -->
+<div class="toolbar">
+  <div class="meta">
+    <div class="meta-text">
+      <span class="updated" id="updatedEl">--</span>
+      <span class="stale" id="staleEl">Stale</span>
+    </div>
+  </div>
+  <button class="gear-btn" onclick="openSettings()" title="Settings">&#9881;</button>
+</div>
 
 <script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
 <script>
@@ -418,7 +403,6 @@
     return code + ' ';
   }
 
-  // Build the projection bar + text HTML for a time-windowed card
   function projectionHtml(w, windowMs) {
     const now = Date.now();
     const resetsAt = new Date(w.resetsAt).getTime();
@@ -434,7 +418,6 @@
          + '<div class="proj-text" style="color:' + c + '">' + msg + '</div>';
   }
 
-  // windowMs: optional; if provided, adds projection bars
   function card(label, w, windowMs) {
     if (!w) return (
       '<div class="card dim">'
@@ -483,10 +466,9 @@
 
   function render(data) {
     lastData = data;
-    // Billing last -- (B) below the fold
     document.getElementById('mainView').innerHTML =
-      card('5-hour',       data.fiveHour,      5 * 3600 * 1000) +
-      card('7-day',        data.sevenDay,       7 * 24 * 3600 * 1000) +
+      card('5-hour',         data.fiveHour,      5 * 3600 * 1000) +
+      card('7-day',          data.sevenDay,       7 * 24 * 3600 * 1000) +
       card('Sonnet (7-day)', data.sevenDaySonnet) +
       card('Opus (7-day)',   data.sevenDayOpus) +
       billingCard(data.extraUsage);
@@ -495,10 +477,8 @@
     document.getElementById('staleEl').classList.toggle('show', !!data.isStale);
   }
 
-  // Refresh relative times every 60s without a network call
   setInterval(() => { if (lastData) render(lastData); }, 60000);
 
-  // SignalR
   const conn = new signalR.HubConnectionBuilder()
     .withUrl('/hub/usage')
     .withAutomaticReconnect()
@@ -535,7 +515,7 @@
       const r = await fetch('/api/settings');
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const s = await r.json();
-      document.getElementById('settingAutostart').checked  = s.startWithWindows;
+      document.getElementById('settingAutostart').checked   = s.startWithWindows;
       document.getElementById('settingCloseToTray').checked = s.closeToTray;
       document.getElementById('settingPort').value          = s.serverPort;
     } catch (e) {
@@ -563,9 +543,7 @@
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       msg.style.color = 'var(--green)';
-      msg.textContent = body.serverPort !== parseInt(document.getElementById('settingPort').value, 10)
-        ? 'Saved. Port change takes effect after restart.'
-        : 'Saved.';
+      msg.textContent = 'Saved.';
     } catch (e) {
       msg.style.color = 'var(--red)';
       msg.textContent = 'Save failed.';
