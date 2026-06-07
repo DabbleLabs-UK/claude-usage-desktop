@@ -1,6 +1,5 @@
 using System.Net;
 using ClaudeUsage.Hubs;
-using ClaudeUsage.Models;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -13,6 +12,7 @@ public sealed class UsagePoller : BackgroundService
     private readonly UsageState _state;
     private readonly IHubContext<UsageHub> _hub;
     private readonly ILogger<UsagePoller> _logger;
+    private readonly SemaphoreSlim _wakeSignal = new(0, 1);
 
     public UsagePoller(
         UsageService usageService,
@@ -26,13 +26,28 @@ public sealed class UsagePoller : BackgroundService
         _logger = logger;
     }
 
+    public void TriggerImmediatePoll()
+    {
+        try { _wakeSignal.Release(); }
+        catch (SemaphoreFullException) { }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
             await PollAsync(stoppingToken);
-            try { await Task.Delay(TimeSpan.FromSeconds(180), stoppingToken); }
-            catch (OperationCanceledException) { break; }
+            using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            try
+            {
+                await Task.WhenAny(
+                    Task.Delay(TimeSpan.FromSeconds(180), delayCts.Token),
+                    _wakeSignal.WaitAsync(stoppingToken));
+            }
+            finally
+            {
+                delayCts.Cancel();
+            }
         }
     }
 

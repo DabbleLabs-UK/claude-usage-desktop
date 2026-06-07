@@ -3,6 +3,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>ClaudeUsage</RootNamespace>
@@ -11,6 +12,13 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!-- UseWindowsForms adds a global implicit 'using System.Windows.Forms' which
+       conflicts with System.Windows.Application. Remove it; App.xaml.cs uses a
+       manual 'using WinForms = System.Windows.Forms' alias instead. -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
   </ItemGroup>
 
   <ItemGroup>

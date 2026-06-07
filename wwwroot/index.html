@@ -50,6 +50,12 @@
 
     .meta {
       display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .meta-text {
+      display: flex;
       flex-direction: column;
       align-items: flex-end;
       gap: 3px;
@@ -73,6 +79,19 @@
     }
     .stale.show { display: inline; }
 
+    .gear-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 1.05rem;
+      cursor: pointer;
+      padding: 5px 7px;
+      border-radius: 7px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .gear-btn:hover { color: var(--text); background: var(--border); }
+
     main {
       flex: 1;
       padding: 12px;
@@ -81,6 +100,8 @@
       gap: 9px;
       overflow-y: auto;
     }
+
+    .hidden { display: none !important; }
 
     .loading {
       color: var(--muted);
@@ -127,10 +148,24 @@
       margin-bottom: 8px;
     }
 
+    .proj-track {
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: -4px;
+      margin-bottom: 6px;
+    }
+
     .fill {
       height: 100%;
       border-radius: 3px;
       transition: width 0.5s ease;
+    }
+
+    .proj-text {
+      font-size: 0.68rem;
+      margin-bottom: 6px;
     }
 
     .reset {
@@ -162,6 +197,127 @@
       color: var(--text);
     }
 
+    /* Settings view */
+    .settings-view {
+      flex: 1;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+    }
+
+    .settings-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 2px;
+    }
+
+    .settings-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .back-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.75rem;
+      cursor: pointer;
+      padding: 4px 10px;
+      border-radius: 7px;
+    }
+    .back-btn:hover { color: var(--text); border-color: var(--muted); }
+
+    .setting-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 12px 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .setting-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .setting-label {
+      font-size: 0.82rem;
+      color: var(--text);
+    }
+
+    .setting-note {
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .toggle {
+      flex-shrink: 0;
+      width: 40px;
+      height: 22px;
+      appearance: none;
+      -webkit-appearance: none;
+      background: var(--border);
+      border-radius: 11px;
+      cursor: pointer;
+      position: relative;
+      transition: background 0.2s;
+    }
+    .toggle:checked { background: var(--accent); }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      background: white;
+      border-radius: 50%;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.2s;
+    }
+    .toggle:checked::after { transform: translateX(18px); }
+
+    .port-input {
+      flex-shrink: 0;
+      width: 78px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.85rem;
+      padding: 4px 8px;
+      text-align: right;
+    }
+    .port-input:focus { outline: none; border-color: var(--accent); }
+
+    .save-btn {
+      background: var(--accent);
+      color: #0d0d1a;
+      font-weight: 700;
+      font-size: 0.82rem;
+      border: none;
+      border-radius: 8px;
+      padding: 11px;
+      cursor: pointer;
+      width: 100%;
+    }
+    .save-btn:hover { opacity: 0.88; }
+    .save-btn:disabled { opacity: 0.45; cursor: default; }
+
+    .save-msg {
+      font-size: 0.72rem;
+      text-align: center;
+      min-height: 1.2em;
+    }
+
     footer {
       text-align: center;
       padding: 8px;
@@ -176,14 +332,50 @@
 <header>
   <h1>Claude Usage</h1>
   <div class="meta">
-    <span class="updated" id="updatedEl">--</span>
-    <span class="stale" id="staleEl">Stale</span>
+    <div class="meta-text">
+      <span class="updated" id="updatedEl">--</span>
+      <span class="stale" id="staleEl">Stale</span>
+    </div>
+    <button class="gear-btn" onclick="openSettings()" title="Settings">&#9881;</button>
   </div>
 </header>
 
-<main id="main">
+<main id="mainView">
   <div class="loading">Loading...</div>
 </main>
+
+<div id="settingsView" class="settings-view hidden">
+  <div class="settings-header">
+    <span class="settings-title">Settings</span>
+    <button class="back-btn" onclick="closeSettings()">Done</button>
+  </div>
+
+  <div class="setting-card">
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Start with Windows</div>
+      </div>
+      <input type="checkbox" id="settingAutostart" class="toggle">
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Close to tray</div>
+        <div class="setting-note">Hides instead of quitting when window is closed</div>
+      </div>
+      <input type="checkbox" id="settingCloseToTray" class="toggle">
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Server port</div>
+        <div class="setting-note">Restart required to take effect</div>
+      </div>
+      <input type="number" id="settingPort" class="port-input" min="1024" max="65535">
+    </div>
+  </div>
+
+  <button id="saveBtn" class="save-btn" onclick="saveSettings()">Save Settings</button>
+  <div id="saveMsg" class="save-msg"></div>
+</div>
 
 <footer>Claude Usage Monitor</footer>
 
@@ -191,10 +383,17 @@
 <script>
   let lastData = null;
 
+  // Colour helpers
   function color(pct) {
     if (pct >= 100) return 'var(--red)';
     if (pct >= 85)  return 'var(--orange)';
     if (pct >= 70)  return 'var(--yellow)';
+    return 'var(--green)';
+  }
+
+  function projColor(pct) {
+    if (pct > 100) return 'var(--red)';
+    if (pct >= 80) return 'var(--yellow)';
     return 'var(--green)';
   }
 
@@ -219,31 +418,52 @@
     return code + ' ';
   }
 
-  function card(label, w) {
-    if (!w) return `
-      <div class="card dim">
-        <div class="card-head">
-          <span class="label">${label}</span>
-          <span class="pct" style="color:var(--muted)">--</span>
-        </div>
-        <div class="track"><div class="fill" style="width:0%;background:var(--border)"></div></div>
-        <div class="reset">Not tracked this period</div>
-      </div>`;
+  // Build the projection bar + text HTML for a time-windowed card
+  function projectionHtml(w, windowMs) {
+    const now = Date.now();
+    const resetsAt = new Date(w.resetsAt).getTime();
+    const elapsed = Math.max(0.01, Math.min(1, (now - (resetsAt - windowMs)) / windowMs));
+    const proj = w.utilization / elapsed;
+    const barW = Math.min(proj, 100).toFixed(1);
+    const c = projColor(proj);
+    const pctRounded = Math.round(proj);
+    const msg = proj > 100
+      ? 'Projected: ' + pctRounded + '% -- over limit'
+      : 'Projected: ' + pctRounded + '% by reset';
+    return '<div class="proj-track"><div class="fill" style="width:' + barW + '%;background:' + c + ';opacity:0.55"></div></div>'
+         + '<div class="proj-text" style="color:' + c + '">' + msg + '</div>';
+  }
+
+  // windowMs: optional; if provided, adds projection bars
+  function card(label, w, windowMs) {
+    if (!w) return (
+      '<div class="card dim">'
+      + '<div class="card-head">'
+      + '<span class="label">' + label + '</span>'
+      + '<span class="pct" style="color:var(--muted)">--</span>'
+      + '</div>'
+      + '<div class="track"><div class="fill" style="width:0%;background:var(--border)"></div></div>'
+      + '<div class="reset">Not tracked this period</div>'
+      + '</div>');
 
     const pct = w.utilization;
     const c = color(pct);
     const barW = Math.min(pct, 100).toFixed(1);
     const rel = timeUntil(w.resetsAt);
     const abs = new Date(w.resetsAt).toLocaleString();
-    return `
-      <div class="card">
-        <div class="card-head">
-          <span class="label">${label}</span>
-          <span class="pct" style="color:${c}">${fmtPct(pct)}</span>
-        </div>
-        <div class="track"><div class="fill" style="width:${barW}%;background:${c}"></div></div>
-        <div class="reset">Resets in <b>${rel}</b> &nbsp;<span title="${abs}">(${new Date(w.resetsAt).toUTCString().slice(17,22)} UTC)</span></div>
-      </div>`;
+    const utcTime = new Date(w.resetsAt).toUTCString().slice(17, 22);
+    const proj = windowMs ? projectionHtml(w, windowMs) : '';
+
+    return (
+      '<div class="card">'
+      + '<div class="card-head">'
+      + '<span class="label">' + label + '</span>'
+      + '<span class="pct" style="color:' + c + '">' + fmtPct(pct) + '</span>'
+      + '</div>'
+      + '<div class="track"><div class="fill" style="width:' + barW + '%;background:' + c + '"></div></div>'
+      + proj
+      + '<div class="reset">Resets in <b>' + rel + '</b> &nbsp;<span title="' + abs + '">(' + utcTime + ' UTC)</span></div>'
+      + '</div>');
   }
 
   function billingCard(eu) {
@@ -251,23 +471,24 @@
     const sym = currencySymbol(eu.currency);
     const pct = eu.utilization;
     const barW = Math.min(pct, 100).toFixed(1);
-    return `
-      <div class="billing">
-        <div class="billing-row">
-          <span class="label">Monthly billing</span>
-          <span class="billing-amount">${sym}${eu.usedCredits.toFixed(2)} / ${sym}${eu.monthlyLimit.toFixed(0)}</span>
-        </div>
-        <div class="track"><div class="fill" style="width:${barW}%;background:${color(pct)}"></div></div>
-      </div>`;
+    return (
+      '<div class="billing">'
+      + '<div class="billing-row">'
+      + '<span class="label">Monthly billing</span>'
+      + '<span class="billing-amount">' + sym + eu.usedCredits.toFixed(2) + ' / ' + sym + eu.monthlyLimit.toFixed(0) + '</span>'
+      + '</div>'
+      + '<div class="track"><div class="fill" style="width:' + barW + '%;background:' + color(pct) + '"></div></div>'
+      + '</div>');
   }
 
   function render(data) {
     lastData = data;
-    document.getElementById('main').innerHTML =
-      card('5-hour', data.fiveHour) +
-      card('7-day', data.sevenDay) +
+    // Billing last -- (B) below the fold
+    document.getElementById('mainView').innerHTML =
+      card('5-hour',       data.fiveHour,      5 * 3600 * 1000) +
+      card('7-day',        data.sevenDay,       7 * 24 * 3600 * 1000) +
       card('Sonnet (7-day)', data.sevenDaySonnet) +
-      card('Opus (7-day)', data.sevenDayOpus) +
+      card('Opus (7-day)',   data.sevenDayOpus) +
       billingCard(data.extraUsage);
     document.getElementById('updatedEl').textContent =
       'updated ' + new Date(data.fetchedAt).toLocaleTimeString();
@@ -290,11 +511,68 @@
     catch (e) { console.warn('SignalR connect failed, retrying in 5s', e); setTimeout(connect, 5000); }
   })();
 
-  // Initial load (poller may not have fired yet; gracefully handles 404)
   fetch('/api/usage')
     .then(r => r.ok ? r.json() : null)
     .then(d => { if (d) render(d); })
     .catch(e => console.warn('Initial fetch failed:', e));
+
+  // ---- Settings ----
+
+  window.openSettings = function() {
+    document.getElementById('mainView').classList.add('hidden');
+    document.getElementById('settingsView').classList.remove('hidden');
+    loadSettings();
+  };
+
+  function closeSettings() {
+    document.getElementById('settingsView').classList.add('hidden');
+    document.getElementById('mainView').classList.remove('hidden');
+  }
+
+  async function loadSettings() {
+    document.getElementById('saveMsg').textContent = '';
+    try {
+      const r = await fetch('/api/settings');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const s = await r.json();
+      document.getElementById('settingAutostart').checked  = s.startWithWindows;
+      document.getElementById('settingCloseToTray').checked = s.closeToTray;
+      document.getElementById('settingPort').value          = s.serverPort;
+    } catch (e) {
+      const msg = document.getElementById('saveMsg');
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Failed to load settings.';
+    }
+  }
+
+  async function saveSettings() {
+    const btn = document.getElementById('saveBtn');
+    const msg = document.getElementById('saveMsg');
+    btn.disabled = true;
+    msg.textContent = '';
+    try {
+      const body = {
+        startWithWindows: document.getElementById('settingAutostart').checked,
+        closeToTray:      document.getElementById('settingCloseToTray').checked,
+        serverPort:       parseInt(document.getElementById('settingPort').value, 10),
+      };
+      const r = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      msg.style.color = 'var(--green)';
+      msg.textContent = body.serverPort !== parseInt(document.getElementById('settingPort').value, 10)
+        ? 'Saved. Port change takes effect after restart.'
+        : 'Saved.';
+    } catch (e) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Save failed.';
+    } finally {
+      btn.disabled = false;
+    }
+  }
 </script>
 
 </body>
