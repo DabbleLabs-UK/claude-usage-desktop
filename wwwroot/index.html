@@ -158,9 +158,18 @@
       transition: width 0.5s ease;
     }
 
+    /* proj-text and reset sit side-by-side inside .card-footer */
+    .card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: nowrap;
+    }
+
     .proj-text {
       font-size: 0.68rem;
-      margin-bottom: 6px;
+      flex-shrink: 0;
     }
 
     .reset {
@@ -403,21 +412,6 @@
     return code + ' ';
   }
 
-  function projectionHtml(w, windowMs) {
-    const now = Date.now();
-    const resetsAt = new Date(w.resetsAt).getTime();
-    const elapsed = Math.max(0.01, Math.min(1, (now - (resetsAt - windowMs)) / windowMs));
-    const proj = w.utilization / elapsed;
-    const barW = Math.min(proj, 100).toFixed(1);
-    const c = projColor(proj);
-    const pctRounded = Math.round(proj);
-    const msg = proj > 100
-      ? 'Projected: ' + pctRounded + '% -- over limit'
-      : 'Projected: ' + pctRounded + '% by reset';
-    return '<div class="proj-track"><div class="fill" style="width:' + barW + '%;background:' + c + ';opacity:0.55"></div></div>'
-         + '<div class="proj-text" style="color:' + c + '">' + msg + '</div>';
-  }
-
   function card(label, w, windowMs) {
     if (!w) return (
       '<div class="card dim">'
@@ -435,7 +429,35 @@
     const rel = timeUntil(w.resetsAt);
     const abs = new Date(w.resetsAt).toLocaleString();
     const utcTime = new Date(w.resetsAt).toUTCString().slice(17, 22);
-    const proj = windowMs ? projectionHtml(w, windowMs) : '';
+    const resetSpan = 'Resets in <b>' + rel + '</b> &nbsp;<span title="' + abs + '">(' + utcTime + ' UTC)</span>';
+
+    if (windowMs) {
+      // Compute projection
+      const resetsAt = new Date(w.resetsAt).getTime();
+      const elapsed = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
+      const proj = pct / elapsed;
+      const projBarW = Math.min(proj, 100).toFixed(1);
+      const pc = projColor(proj);
+      const projMsg = proj > 100
+        ? 'Projected: ' + Math.round(proj) + '% -- over limit'
+        : 'Projected: ' + Math.round(proj) + '% by reset';
+
+      // Actual bar = ghosted (opacity:0.55); projection bar = solid (prominent)
+      return (
+        '<div class="card">'
+        + '<div class="card-head">'
+        + '<span class="label">' + label + '</span>'
+        + '<span class="pct" style="color:' + c + '">' + fmtPct(pct) + '</span>'
+        + '</div>'
+        + '<div class="track"><div class="fill" style="width:' + barW + '%;background:' + c + ';opacity:0.55"></div></div>'
+        + '<div class="proj-track"><div class="fill" style="width:' + projBarW + '%;background:' + pc + '"></div></div>'
+        // Proj text left, reset text right -- single line
+        + '<div class="card-footer">'
+        + '<span class="proj-text" style="color:' + pc + '">' + projMsg + '</span>'
+        + '<span class="reset">' + resetSpan + '</span>'
+        + '</div>'
+        + '</div>');
+    }
 
     return (
       '<div class="card">'
@@ -444,8 +466,7 @@
       + '<span class="pct" style="color:' + c + '">' + fmtPct(pct) + '</span>'
       + '</div>'
       + '<div class="track"><div class="fill" style="width:' + barW + '%;background:' + c + '"></div></div>'
-      + proj
-      + '<div class="reset">Resets in <b>' + rel + '</b> &nbsp;<span title="' + abs + '">(' + utcTime + ' UTC)</span></div>'
+      + '<div class="reset">' + resetSpan + '</div>'
       + '</div>');
   }
 
