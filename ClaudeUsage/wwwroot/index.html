@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Usage</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0d0d1a;
+      --surface: #151526;
+      --card:    #1b1b30;
+      --border:  #252540;
+      --text:    #dde1f0;
+      --muted:   #60688a;
+      --dim:     #8890b0;
+      --accent:  #a78bfa;
+      --green:   #34d399;
+      --yellow:  #fbbf24;
+      --orange:  #f97316;
+      --red:     #ef4444;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 14px 16px 12px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    h1 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.01em;
+    }
+
+    .meta {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 3px;
+    }
+
+    .updated {
+      font-size: 0.68rem;
+      color: var(--muted);
+    }
+
+    .stale {
+      display: none;
+      font-size: 0.62rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      background: #7c2d12;
+      color: #fca5a5;
+      padding: 1px 7px;
+      border-radius: 999px;
+    }
+    .stale.show { display: inline; }
+
+    main {
+      flex: 1;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      overflow-y: auto;
+    }
+
+    .loading {
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-align: center;
+      margin-top: 48px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 13px 15px;
+    }
+
+    .card.dim { opacity: 0.42; }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 9px;
+    }
+
+    .label {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    .pct {
+      font-size: 1.35rem;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .track {
+      height: 5px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+
+    .fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    .reset {
+      font-size: 0.72rem;
+      color: var(--dim);
+    }
+
+    .reset b { color: var(--text); font-weight: 600; }
+
+    .billing {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 11px 15px;
+    }
+
+    .billing-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .billing .label { margin: 0; }
+
+    .billing-amount {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    footer {
+      text-align: center;
+      padding: 8px;
+      font-size: 0.62rem;
+      color: #2a2a45;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Claude Usage</h1>
+  <div class="meta">
+    <span class="updated" id="updatedEl">--</span>
+    <span class="stale" id="staleEl">Stale</span>
+  </div>
+</header>
+
+<main id="main">
+  <div class="loading">Loading...</div>
+</main>
+
+<footer>Claude Usage Monitor</footer>
+
+<script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
+<script>
+  let lastData = null;
+
+  function color(pct) {
+    if (pct >= 100) return 'var(--red)';
+    if (pct >= 85)  return 'var(--orange)';
+    if (pct >= 70)  return 'var(--yellow)';
+    return 'var(--green)';
+  }
+
+  function timeUntil(iso) {
+    const ms = new Date(iso) - Date.now();
+    if (ms <= 0) return 'now';
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    if (h >= 24) { const d = Math.floor(h / 24); return d + 'd ' + (h % 24) + 'h'; }
+    if (h > 0) return h + 'h ' + m + 'm';
+    return m + 'm';
+  }
+
+  function fmtPct(p) {
+    return (p % 1 === 0 ? p.toFixed(0) : p.toFixed(1)) + '%';
+  }
+
+  function currencySymbol(code) {
+    if (code === 'GBP') return '£';
+    if (code === 'USD') return '$';
+    if (code === 'EUR') return '€';
+    return code + ' ';
+  }
+
+  function card(label, w) {
+    if (!w) return `
+      <div class="card dim">
+        <div class="card-head">
+          <span class="label">${label}</span>
+          <span class="pct" style="color:var(--muted)">--</span>
+        </div>
+        <div class="track"><div class="fill" style="width:0%;background:var(--border)"></div></div>
+        <div class="reset">Not tracked this period</div>
+      </div>`;
+
+    const pct = w.utilization;
+    const c = color(pct);
+    const barW = Math.min(pct, 100).toFixed(1);
+    const rel = timeUntil(w.resetsAt);
+    const abs = new Date(w.resetsAt).toLocaleString();
+    return `
+      <div class="card">
+        <div class="card-head">
+          <span class="label">${label}</span>
+          <span class="pct" style="color:${c}">${fmtPct(pct)}</span>
+        </div>
+        <div class="track"><div class="fill" style="width:${barW}%;background:${c}"></div></div>
+        <div class="reset">Resets in <b>${rel}</b> &nbsp;<span title="${abs}">(${new Date(w.resetsAt).toUTCString().slice(17,22)} UTC)</span></div>
+      </div>`;
+  }
+
+  function billingCard(eu) {
+    if (!eu) return '';
+    const sym = currencySymbol(eu.currency);
+    const pct = eu.utilization;
+    const barW = Math.min(pct, 100).toFixed(1);
+    return `
+      <div class="billing">
+        <div class="billing-row">
+          <span class="label">Monthly billing</span>
+          <span class="billing-amount">${sym}${eu.usedCredits.toFixed(2)} / ${sym}${eu.monthlyLimit.toFixed(0)}</span>
+        </div>
+        <div class="track"><div class="fill" style="width:${barW}%;background:${color(pct)}"></div></div>
+      </div>`;
+  }
+
+  function render(data) {
+    lastData = data;
+    document.getElementById('main').innerHTML =
+      card('5-hour', data.fiveHour) +
+      card('7-day', data.sevenDay) +
+      card('Sonnet (7-day)', data.sevenDaySonnet) +
+      card('Opus (7-day)', data.sevenDayOpus) +
+      billingCard(data.extraUsage);
+    document.getElementById('updatedEl').textContent =
+      'updated ' + new Date(data.fetchedAt).toLocaleTimeString();
+    document.getElementById('staleEl').classList.toggle('show', !!data.isStale);
+  }
+
+  // Refresh relative times every 60s without a network call
+  setInterval(() => { if (lastData) render(lastData); }, 60000);
+
+  // SignalR
+  const conn = new signalR.HubConnectionBuilder()
+    .withUrl('/hub/usage')
+    .withAutomaticReconnect()
+    .build();
+
+  conn.on('usageUpdated', render);
+
+  (async function connect() {
+    try { await conn.start(); }
+    catch (e) { console.warn('SignalR connect failed, retrying in 5s', e); setTimeout(connect, 5000); }
+  })();
+
+  // Initial load (poller may not have fired yet; gracefully handles 404)
+  fetch('/api/usage')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) render(d); })
+    .catch(e => console.warn('Initial fetch failed:', e));
+</script>
+
+</body>
+</html>
