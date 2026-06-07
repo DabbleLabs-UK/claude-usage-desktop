@@ -542,9 +542,10 @@
 <script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
-  let lastData    = null;
-  let _instanceId = null;
-  let _thresholds = { orange: 0.25, red: 0.10 };
+  let lastData           = null;
+  let _instanceId        = null;
+  let _thresholds        = { orange: 0.25, red: 0.10 };
+  let _reconnectPollTimer = null;
 
   async function fetchInstanceId() {
     try {
@@ -725,33 +726,97 @@
 
   const conn = new signalR.HubConnectionBuilder()
     .withUrl('/hub/usage')
-    .withAutomaticReconnect()
+    // Extended retry schedule -- covers slow server restarts.
+    // Polling fallback (below) catches anything beyond this.
+    .withAutomaticReconnect([0, 2000, 5000, 10000, 15000, 20000, 30000, 30000, 30000])
     .build();
 
   conn.on('usageUpdated', render);
 
-  // On reconnect: if the server has a new instance id it restarted with new code -> reload.
-  conn.onreconnected(async () => {
+  // ---- Restart-detection: poll /api/instance while disconnected ----
+  // Fires location.reload() as soon as the new server answers with a
+  // different instance id, regardless of whether SignalR managed to
+  // reconnect via its own retry cycle.
+
+  function startReconnectPolling() {
+    if (_reconnectPollTimer !== null) return; // already polling
+    console.log('[CU] Disconnected -- polling /api/instance every 2.5s');
+    _reconnectPollTimer = setInterval(async () => {
+      const newId = await fetchInstanceId();
+      if (newId === null) { console.log('[CU] Poll: server not yet reachable'); return; }
+      console.log('[CU] Poll: server up. stored=' + _instanceId + ' live=' + newId);
+      clearInterval(_reconnectPollTimer);
+      _reconnectPollTimer = null;
+      if (_instanceId && newId !== _instanceId) {
+        console.log('[CU] Instance id changed -> reloading');
+        location.reload();
+      } else {
+        console.log('[CU] Same instance id (blip) -- attempting manual SignalR restart');
+        trySignalRRestart();
+      }
+    }, 2500);
+  }
+
+  async function trySignalRRestart() {
+    if (conn.state !== signalR.HubConnectionState.Disconnected) {
+      console.log('[CU] SignalR state=' + conn.state + ' -- auto-reconnect still active, skipping manual start');
+      return;
+    }
+    try {
+      console.log('[CU] Restarting SignalR manually...');
+      await conn.start();
+      console.log('[CU] SignalR manual restart OK');
+    } catch (e) {
+      console.warn('[CU] Manual restart failed, retrying in 3s', e);
+      setTimeout(trySignalRRestart, 3000);
+    }
+  }
+
+  conn.onreconnecting(err => {
+    console.log('[CU] SignalR reconnecting...', err ? err.message : '(no error)');
+    startReconnectPolling(); // start polling now; onreconnected will cancel it if SignalR wins
+  });
+
+  conn.onreconnected(async connectionId => {
+    console.log('[CU] SignalR reconnected (connectionId=' + connectionId + ')');
+    if (_reconnectPollTimer !== null) { clearInterval(_reconnectPollTimer); _reconnectPollTimer = null; }
     const newId = await fetchInstanceId();
+    console.log('[CU] Instance id check: stored=' + _instanceId + ' live=' + newId);
     if (newId && _instanceId && newId !== _instanceId) {
+      console.log('[CU] Instance id changed -> reloading');
       location.reload();
       return;
     }
     if (newId) _instanceId = newId;
+    console.log('[CU] Same instance id -- no reload needed');
+  });
+
+  conn.onclose(err => {
+    // Fires when auto-reconnect exhausts all retries and gives up.
+    console.log('[CU] SignalR closed (all retries exhausted):', err ? err.message : 'no error');
+    startReconnectPolling(); // poll will restart SignalR once server is back
   });
 
   (async function connect() {
-    try { await conn.start(); }
-    catch (e) { console.warn('SignalR connect failed, retrying in 5s', e); setTimeout(connect, 5000); }
+    try {
+      await conn.start();
+      console.log('[CU] SignalR connected');
+    } catch (e) {
+      console.warn('[CU] SignalR connect failed, retrying in 5s', e);
+      setTimeout(connect, 5000);
+    }
   })();
 
   fetch('/api/usage')
     .then(r => r.ok ? r.json() : null)
     .then(d => { if (d) render(d); })
-    .catch(e => console.warn('Initial fetch failed:', e));
+    .catch(e => console.warn('[CU] Initial fetch failed:', e));
 
-  // Store the instance id on first load so reconnects can compare against it.
-  fetchInstanceId().then(id => { if (id) _instanceId = id; });
+  // Store instance id on first load; reconnects compare against this.
+  fetchInstanceId().then(id => {
+    if (id) { _instanceId = id; console.log('[CU] Instance id stored on load:', id); }
+    else { console.warn('[CU] Failed to fetch initial instance id'); }
+  });
 
   // ---- Settings ----
 
