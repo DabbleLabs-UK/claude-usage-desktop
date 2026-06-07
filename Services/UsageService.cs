@@ -27,6 +27,15 @@ public sealed class UsageService
         var raw = JsonSerializer.Deserialize<RawUsageResponse>(body)
             ?? throw new InvalidOperationException("Empty usage response.");
 
+        // Log raw extra_usage so the field semantics (units) can be verified.
+        // Visible in the debug output window; raw values also appear in /api/usage
+        // as extraUsage.rawMonthlyLimit / extraUsage.rawUsedCredits.
+        var reu = raw.ExtraUsage;
+        System.Diagnostics.Debug.WriteLine(
+            $"[ClaudeUsage] extra_usage: is_enabled={reu?.IsEnabled} " +
+            $"monthly_limit={reu?.MonthlyLimit} used_credits={reu?.UsedCredits} " +
+            $"utilization={reu?.Utilization} currency={reu?.Currency}");
+
         return Map(raw);
     }
 
@@ -48,7 +57,14 @@ public sealed class UsageService
         SevenDayOpus: Map(raw.SevenDayOpus),
         SevenDaySonnet: Map(raw.SevenDaySonnet),
         ExtraUsage: raw.ExtraUsage is { IsEnabled: true } eu
-            ? new ExtraUsageData(eu.MonthlyLimit, eu.UsedCredits, eu.Utilization, eu.Currency ?? "")
+                    && eu.MonthlyLimit.HasValue && eu.UsedCredits.HasValue
+            ? new ExtraUsageData(
+                MonthlyLimit:    eu.MonthlyLimit.Value / 100.0,
+                UsedCredits:     eu.UsedCredits.Value  / 100.0,
+                Utilization:     eu.Utilization ?? 0,
+                Currency:        eu.Currency ?? "",
+                RawMonthlyLimit: eu.MonthlyLimit.Value,
+                RawUsedCredits:  eu.UsedCredits.Value)
             : null,
         FetchedAt: DateTimeOffset.UtcNow);
 
@@ -77,9 +93,9 @@ public sealed class UsageService
 
     private record RawExtraUsage(
         [property: JsonPropertyName("is_enabled")] bool IsEnabled,
-        [property: JsonPropertyName("monthly_limit")] double MonthlyLimit,
-        [property: JsonPropertyName("used_credits")] double UsedCredits,
-        [property: JsonPropertyName("utilization")] double Utilization,
+        [property: JsonPropertyName("monthly_limit")] double? MonthlyLimit,
+        [property: JsonPropertyName("used_credits")] double? UsedCredits,
+        [property: JsonPropertyName("utilization")] double? Utilization,
         [property: JsonPropertyName("currency")] string? Currency,
         [property: JsonPropertyName("disabled_reason")] string? DisabledReason);
 }

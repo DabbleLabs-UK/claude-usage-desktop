@@ -705,7 +705,13 @@
   }
 
   function billingCard(eu) {
-    if (!eu) return '';
+    if (!eu) return (
+      '<div class="billing">'
+      + '<div class="billing-row">'
+      + '<span class="label">Monthly billing</span>'
+      + '<span class="billing-amount" style="color:var(--muted)">Not enabled</span>'
+      + '</div>'
+      + '</div>');
     const sym  = currencySymbol(eu.currency);
     const pct  = eu.utilization;
     const barW = Math.min(pct, 100).toFixed(1);
