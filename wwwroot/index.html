@@ -10,7 +10,7 @@
     :root {
       --bg:      #0d0d1a;
       --surface: #151526;
-      --card:    #1b1b30;
+      --card:    #252550;
       --border:  #252540;
       --text:    #dde1f0;
       --muted:   #60688a;
@@ -126,6 +126,14 @@
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--muted);
+    }
+
+    /* Card title labels: prominent, near-white, heavier than generic .label */
+    .card-head .label {
+      font-size: 0.85rem;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: 0.05em;
     }
 
     .pct {
@@ -642,7 +650,9 @@
       const headroom   = 100 - proj;
       const spareRatio = remPeriod > 0.5
         ? Math.round((headroom / remPeriod) * 100) : 0;
-      const ratioLabel = 'Remaining period spare ratio ' + spareRatio + '%';
+      const ratioEmoji = spareRatio > 0 ? ' ✅' : ' ❌';
+      const ratioStyle = spareRatio <= 0 ? ' style="color:var(--red)"' : '';
+      const ratioLabel = 'Remaining period spare ratio ' + spareRatio + '%' + ratioEmoji;
 
       return (
         '<div class="card">'
@@ -667,7 +677,7 @@
         + '<div class="proj-track">'
         + '<div class="fill" style="width:' + projBarW + '%;background:' + pc + '"></div>'
         + '</div>'
-        + '<span class="proj-ratio-label">' + ratioLabel + '</span>'
+        + '<span class="proj-ratio-label"' + ratioStyle + '>' + ratioLabel + '</span>'
         + '</div><span class="bar-side-label" style="color:' + pc + '">' + fmtPct(proj) + '</span></div>'
         // Vertical elapsed-time marker across both bars
         + '<div class="elapsed-line"></div>'
