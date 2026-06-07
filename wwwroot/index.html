@@ -203,13 +203,26 @@
       pointer-events: none;
     }
 
-    /* -- DEBUG: projection threshold readout -- remove block when no longer needed -- */
-    .debug-proj {
+    /* Projection bar: relative container lets the ratio label float centred over the bar */
+    .proj-bar-container {
+      position: relative;
+      flex: 1;
+    }
+
+    /* Centred label on the projection bar showing spare-ratio % */
+    .proj-ratio-label {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
       font-size: 0.58rem;
-      color: var(--muted);
-      font-variant-numeric: tabular-nums;
-      margin-top: 2px;
-      letter-spacing: 0.01em;
+      font-weight: 700;
+      white-space: nowrap;
+      color: rgba(255, 255, 255, 0.92);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+      pointer-events: none;
+      user-select: none;
+      line-height: 1;
     }
 
     /* Compact-mode header row: hidden in full mode */
@@ -623,15 +636,12 @@
         ? 'Projected: ' + Math.round(proj) + '% -- over limit'
         : 'Projected: ' + Math.round(proj) + '% by reset';
 
-      // -- DEBUG: threshold readout values --
-      const dbHead  = Math.round(100 - proj);
-      const dbRem   = Math.round((1 - elapsed) * 100);
-      const dbRatio = (1 - elapsed) > 0.005
-        ? Math.round(((100 - proj) / ((1 - elapsed) * 100)) * 100) : null;
-      const dbR     = Math.round(_thresholds.red    * 100);
-      const dbO     = Math.round(_thresholds.orange * 100);
-      const debugHtml = 'hr ' + dbHead + '% · rem ' + dbRem + '% · ratio '
-        + (dbRatio !== null ? dbRatio + '%' : '--') + ' · R≤' + dbR + ' O≤' + dbO;
+      // Spare ratio: headroom / remainingPeriod -- the value the thresholds test against
+      const remPeriod  = (1 - elapsed) * 100;
+      const headroom   = 100 - proj;
+      const spareRatio = remPeriod > 0.5
+        ? Math.round((headroom / remPeriod) * 100) : 0;
+      const ratioLabel = 'Remaining period spare ratio ' + spareRatio + '%';
 
       return (
         '<div class="card">'
@@ -651,15 +661,16 @@
         + '<div class="bar-row"><div class="track">'
         + '<div class="fill" style="width:' + barW + '%;background:' + c + ';opacity:0.55"></div>'
         + '</div><span class="bar-side-label" style="color:' + c + '">' + fmtPct(pct) + '</span></div>'
-        // Projection bar (solid) + right label
-        + '<div class="bar-row"><div class="proj-track">'
+        // Projection bar (solid): container holds bar + centred ratio label, then right %
+        + '<div class="bar-row"><div class="proj-bar-container">'
+        + '<div class="proj-track">'
         + '<div class="fill" style="width:' + projBarW + '%;background:' + pc + '"></div>'
+        + '</div>'
+        + '<span class="proj-ratio-label">' + ratioLabel + '</span>'
         + '</div><span class="bar-side-label" style="color:' + pc + '">' + fmtPct(proj) + '</span></div>'
         // Vertical elapsed-time marker across both bars
         + '<div class="elapsed-line"></div>'
         + '</div>'
-        // DEBUG threshold readout (full mode only)
-        + '<div class="debug-proj full-only">' + debugHtml + '</div>'
         // Full-mode footer: proj sentence LEFT, reset countdown RIGHT
         + '<div class="card-footer full-only">'
         + '<span class="proj-text" style="color:' + pc + '">' + projMsg + '</span>'
