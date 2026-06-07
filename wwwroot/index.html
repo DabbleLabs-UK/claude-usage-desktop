@@ -468,6 +468,55 @@
     }
     .firewall-btn:hover { opacity: 0.88; }
     .firewall-btn:disabled { opacity: 0.45; cursor: default; }
+
+    /* Detail / explanation view */
+    .detail-view {
+      flex: 1;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+    }
+
+    .detail-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 2px;
+    }
+
+    .detail-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .explain-block {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 11px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .explain-title {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+    }
+
+    .explain-text {
+      font-size: 0.78rem;
+      color: var(--dim);
+      line-height: 1.55;
+    }
   </style>
 </head>
 <body>
@@ -537,6 +586,30 @@
   <div id="saveMsg" class="save-msg"></div>
 </div>
 
+<div id="detailView" class="detail-view hidden">
+  <div class="detail-header">
+    <button class="back-btn" onclick="closeDetail()">&#8592; Back</button>
+    <span class="detail-title" id="detailTitle"></span>
+  </div>
+  <div id="detailCard" onclick="closeDetail()" style="cursor:pointer"></div>
+  <div class="explain-block">
+    <div class="explain-title">Actual bar (ghosted)</div>
+    <div class="explain-text" id="explainActual"></div>
+  </div>
+  <div class="explain-block">
+    <div class="explain-title">Projected bar (solid)</div>
+    <div class="explain-text" id="explainProj"></div>
+  </div>
+  <div class="explain-block">
+    <div class="explain-title">Spare ratio label</div>
+    <div class="explain-text" id="explainRatio"></div>
+  </div>
+  <div class="explain-block">
+    <div class="explain-title">Elapsed-time line</div>
+    <div class="explain-text" id="explainLine"></div>
+  </div>
+</div>
+
 <div class="toolbar">
   <div class="meta">
     <div class="meta-text">
@@ -550,10 +623,12 @@
 <script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
-  let lastData           = null;
-  let _instanceId        = null;
-  let _thresholds        = { orange: 0.25, red: 0.10 };
+  let lastData            = null;
+  let _instanceId         = null;
+  let _thresholds         = { orange: 0.25, red: 0.10 };
   let _reconnectPollTimer = null;
+  let _cardDataMap        = {};
+  let _openCardKey        = null;
 
   async function fetchInstanceId() {
     try {
@@ -617,7 +692,12 @@
 
   // windowMs: 5-hour or 7-day window in ms (falsy = no projection)
   // compactLabel: short label shown in compact mode ("Session", "Week")
-  function card(label, w, windowMs, compactLabel) {
+  // clickable: pass false when rendering inside the detail view to suppress onclick
+  function card(label, w, windowMs, compactLabel, clickable = true) {
+    const clickAttr = (clickable && w)
+      ? ' onclick="openDetail(this.dataset.card)" data-card="' + label + '" style="cursor:pointer"'
+      : '';
+
     if (!w) return (
       '<div class="card dim">'
       + '<div class="card-head">'
@@ -655,7 +735,7 @@
       const ratioLabel = 'Remaining period spare ratio ' + spareRatio + '%' + ratioEmoji;
 
       return (
-        '<div class="card">'
+        '<div class="card"' + clickAttr + '>'
         // Full-mode head: label + large percentage
         + '<div class="card-head full-only">'
         + '<span class="label">' + label + '</span>'
@@ -690,9 +770,9 @@
         + '</div>');
     }
 
-    // Non-windowed card (Sonnet, Opus) -- no projection, no compact variant
+    // Fallback: single-bar card (no projection window available)
     return (
-      '<div class="card">'
+      '<div class="card"' + clickAttr + '>'
       + '<div class="card-head">'
       + '<span class="label">' + label + '</span>'
       + '<span class="pct" style="color:' + c + '">' + fmtPct(pct) + '</span>'
@@ -725,20 +805,73 @@
       + '</div>');
   }
 
+  const W7 = 7 * 24 * 3600 * 1000;
+
   function render(data) {
     lastData = data;
+    _cardDataMap = {
+      '5-hour':         { label: '5-hour',         w: data.fiveHour,       windowMs: 5 * 3600 * 1000 },
+      '7-day':          { label: '7-day',           w: data.sevenDay,       windowMs: W7 },
+      'Sonnet (7-day)': { label: 'Sonnet (7-day)',  w: data.sevenDaySonnet, windowMs: W7 },
+      'Opus (7-day)':   { label: 'Opus (7-day)',    w: data.sevenDayOpus,   windowMs: W7 },
+    };
     document.getElementById('mainView').innerHTML =
-      card('5-hour',         data.fiveHour,      5 * 3600 * 1000,       'Session') +
-      card('7-day',          data.sevenDay,       7 * 24 * 3600 * 1000,  'Week') +
-      card('Sonnet (7-day)', data.sevenDaySonnet) +
-      card('Opus (7-day)',   data.sevenDayOpus) +
+      card('5-hour',         data.fiveHour,      5 * 3600 * 1000, 'Session') +
+      card('7-day',          data.sevenDay,       W7,              'Week') +
+      card('Sonnet (7-day)', data.sevenDaySonnet, W7,              'Sonnet') +
+      card('Opus (7-day)',   data.sevenDayOpus,   W7,              'Opus') +
       billingCard(data.extraUsage);
     document.getElementById('updatedEl').textContent =
       'updated ' + new Date(data.fetchedAt).toLocaleTimeString();
     document.getElementById('staleEl').classList.toggle('show', !!data.isStale);
+    // Refresh the detail card preview if the detail view is currently open
+    if (_openCardKey) {
+      const d = _cardDataMap[_openCardKey];
+      if (d && d.w) document.getElementById('detailCard').innerHTML = card(d.label, d.w, d.windowMs, null, false);
+    }
   }
 
   setInterval(() => { if (lastData) render(lastData); }, 60000);
+
+  // ---- Card detail view ----
+
+  window.openDetail = function(cardKey) {
+    const d = _cardDataMap[cardKey];
+    if (!d || !d.w) return;
+    _openCardKey = cardKey;
+    const { label, w, windowMs } = d;
+    const win = windowMs === 5 * 3600 * 1000 ? '5-hour' : '7-day';
+    document.getElementById('detailTitle').textContent = label;
+    document.getElementById('detailCard').innerHTML = card(label, w, windowMs, null, false);
+    document.getElementById('explainActual').textContent =
+      'Your actual usage so far in this ' + win + ' window, as a % of the rate limit. '
+      + 'Semi-transparent so it stays visually secondary to the projection. Resets in ' + timeUntil(w.resetsAt) + '.';
+    document.getElementById('explainProj').textContent =
+      "Where you're estimated to end up by reset, if your current average rate of use continues "
+      + 'for the rest of this window. Computed by dividing actual usage by the fraction of the window '
+      + 'elapsed -- e.g. 30% used in 40% of the time projects to 75% by reset. A quiet spell pulls it '
+      + 'down; a burst of activity pushes it up fast. Solid fill (not ghosted) makes it the primary '
+      + 'signal. Its colour escalates as the projection tracks toward the thresholds.';
+    document.getElementById('explainRatio').textContent =
+      'Headroom (100% minus projected) expressed as a share of the time still left in the window. '
+      + 'Answers: "of the time remaining, how much spare capacity is there?" Falls toward orange then '
+      + 'red as usage climbs and time shrinks. Thresholds are set in Settings (defaults: orange <=25%, '
+      + 'red <=10%). Tick (✅) = positive spare; red cross (❌) = projected over the limit.';
+    document.getElementById('explainLine').textContent =
+      'The faint vertical line marks how far through the current window you are right now. '
+      + 'Compare it to where the Actual and Projected bars end to see whether usage is tracking '
+      + 'ahead of, behind, or in line with the pace of the period.';
+    document.getElementById('mainView').classList.add('hidden');
+    document.getElementById('settingsView').classList.add('hidden');
+    document.getElementById('detailView').classList.remove('hidden');
+  };
+
+  function closeDetail() {
+    _openCardKey = null;
+    document.getElementById('detailView').classList.add('hidden');
+    document.getElementById('mainView').classList.remove('hidden');
+  }
+  window.closeDetail = closeDetail;
 
   const conn = new signalR.HubConnectionBuilder()
     .withUrl('/hub/usage')
