@@ -35,13 +35,21 @@
     }
 
     .toolbar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
       padding: 10px 16px;
       background: var(--surface);
       border-top: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      flex-shrink: 0;
+      transition: transform 0.3s ease;
+    }
+    .toolbar.toolbar-hidden {
+      transform: translateY(100%);
     }
 
     .meta {
@@ -90,7 +98,7 @@
 
     main {
       flex: 1;
-      padding: 8px;
+      padding: 8px 8px 52px;
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -284,7 +292,7 @@
        shorter to preview the phone layout.
     ──────────────────────────────────────────────────────────────────── */
     @media (max-width: 400px), (max-height: 500px) {
-      main { padding: 5px; gap: 4px; }
+      main { padding: 5px 5px 52px; gap: 4px; }
 
       .card { padding: 6px 10px; }
       .card-head { margin-bottom: 3px; }
@@ -301,7 +309,7 @@
     /* Settings view */
     .settings-view {
       flex: 1;
-      padding: 12px;
+      padding: 12px 12px 52px;
       display: flex;
       flex-direction: column;
       gap: 12px;
@@ -470,7 +478,7 @@
     /* Detail / explanation view */
     .detail-view {
       flex: 1;
-      padding: 12px;
+      padding: 12px 12px 52px;
       display: flex;
       flex-direction: column;
       gap: 10px;
@@ -853,6 +861,7 @@
         document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(el, dr, ratioColor(rr));
       }
     }
+    _checkToolbarOverflow();
   }
 
   setInterval(() => { if (lastData) render(lastData); }, 60000);
@@ -949,12 +958,14 @@
     document.getElementById('mainView').classList.add('hidden');
     document.getElementById('settingsView').classList.add('hidden');
     document.getElementById('detailView').classList.remove('hidden');
+    _checkToolbarOverflow();
   };
 
   function closeDetail() {
     _openCardKey = null;
     document.getElementById('detailView').classList.add('hidden');
     document.getElementById('mainView').classList.remove('hidden');
+    _checkToolbarOverflow();
   }
   window.closeDetail = closeDetail;
 
@@ -1071,11 +1082,13 @@
     document.getElementById('mainView').classList.add('hidden');
     document.getElementById('settingsView').classList.remove('hidden');
     loadSettings();
+    _checkToolbarOverflow();
   };
 
   function closeSettings() {
     document.getElementById('settingsView').classList.add('hidden');
     document.getElementById('mainView').classList.remove('hidden');
+    _checkToolbarOverflow();
   }
 
   async function loadSettings() {
@@ -1231,6 +1244,65 @@
       btn.disabled = false;
     }
   }
+
+  // ---- Toolbar auto-hide ----
+
+  const _toolbarEl = document.querySelector('.toolbar');
+  let _toolbarHideTimer = null;
+  let _toolbarNeedsHide = false;
+
+  function _checkToolbarOverflow() {
+    const ids = ['mainView', 'settingsView', 'detailView'];
+    for (let i = 0; i < ids.length; i++) {
+      const el = document.getElementById(ids[i]);
+      if (el && !el.classList.contains('hidden')) {
+        _toolbarNeedsHide = el.scrollHeight > el.clientHeight + 2;
+        if (!_toolbarNeedsHide) {
+          _toolbarEl.classList.remove('toolbar-hidden');
+          clearTimeout(_toolbarHideTimer);
+          _toolbarHideTimer = null;
+        }
+        return;
+      }
+    }
+    _toolbarNeedsHide = false;
+  }
+
+  function _showToolbar() {
+    _toolbarEl.classList.remove('toolbar-hidden');
+    clearTimeout(_toolbarHideTimer);
+    if (_toolbarNeedsHide) {
+      _toolbarHideTimer = setTimeout(_hideToolbar, 2500);
+    }
+  }
+
+  function _hideToolbar() {
+    if (_toolbarNeedsHide) _toolbarEl.classList.add('toolbar-hidden');
+  }
+
+  ['mainView', 'settingsView', 'detailView'].forEach(function(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    let lastTop = 0;
+    el.addEventListener('scroll', function() {
+      const top = el.scrollTop;
+      if (!_toolbarNeedsHide) { lastTop = top; return; }
+      if (top < lastTop) {
+        clearTimeout(_toolbarHideTimer);
+        _hideToolbar();
+      } else if (top > lastTop) {
+        _showToolbar();
+      }
+      lastTop = top;
+    }, { passive: true });
+  });
+
+  document.addEventListener('touchstart', function() {
+    if (_toolbarNeedsHide) _showToolbar();
+  }, { passive: true });
+
+  window.addEventListener('resize', _checkToolbarOverflow);
+
 </script>
 
 </body>
