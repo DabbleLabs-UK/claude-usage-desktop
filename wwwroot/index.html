@@ -144,20 +144,20 @@
 
     .track {
       position: relative;
-      height: 5px;
+      height: 16px;
       background: var(--border);
       border-radius: 3px;
       overflow: hidden;
-      margin-bottom: 8px;
+      margin-bottom: 5px;
     }
 
     .proj-track {
       position: relative;
-      height: 3px;
+      height: 12px;
       background: var(--border);
       border-radius: 2px;
       overflow: hidden;
-      margin-top: -4px;
+      margin-top: 0;
       margin-bottom: 6px;
     }
 
@@ -167,17 +167,33 @@
       transition: width 0.5s ease;
     }
 
-    /* Bar overlay label: hidden in full mode */
+    /* Bar overlay label: left side, always visible */
     .bar-label {
-      display: none;
+      display: block;
       position: absolute;
       left: 6px;
       top: 50%;
       transform: translateY(-50%);
-      font-size: 0.58rem;
+      font-size: 0.56rem;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
+      color: rgba(255, 255, 255, 0.82);
+      pointer-events: none;
+      user-select: none;
+      white-space: nowrap;
+      line-height: 1;
+    }
+
+    /* Bar overlay percentage: right side, always visible */
+    .bar-pct {
+      display: block;
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 0.56rem;
+      font-weight: 700;
       color: rgba(255, 255, 255, 0.82);
       pointer-events: none;
       user-select: none;
@@ -243,11 +259,9 @@
       .card { padding: 9px 11px; }
       .card-head { margin-bottom: 6px; }
 
-      /* Taller bars so overlay text has room */
+      /* Slightly taller bars in compact so text has more room */
       .track     { height: 18px; margin-bottom: 4px; }
       .proj-track { height: 14px; margin-top: 0; margin-bottom: 4px; }
-
-      .bar-label  { display: block; }
 
       .compact-only { display: flex; }
       .full-only    { display: none !important; }
@@ -373,6 +387,54 @@
       text-align: center;
       min-height: 1.2em;
     }
+
+    /* Phone access / LAN panel */
+    .lan-panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 14px 15px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .lan-panel-label {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      align-self: flex-start;
+    }
+
+    .lan-url {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--accent);
+      word-break: break-all;
+      text-align: center;
+    }
+
+    #lanQr canvas, #lanQr img {
+      border-radius: 6px;
+      display: block;
+    }
+
+    .firewall-btn {
+      flex-shrink: 0;
+      background: var(--accent);
+      color: #0d0d1a;
+      font-weight: 700;
+      font-size: 0.75rem;
+      border: none;
+      border-radius: 7px;
+      padding: 5px 12px;
+      cursor: pointer;
+    }
+    .firewall-btn:hover { opacity: 0.88; }
+    .firewall-btn:disabled { opacity: 0.45; cursor: default; }
   </style>
 </head>
 <body>
@@ -385,6 +447,13 @@
   <div class="settings-header">
     <button class="back-btn" onclick="closeSettings()">&#8592; Back</button>
     <span class="settings-title">Settings</span>
+  </div>
+
+  <!-- LAN / phone access panel -->
+  <div class="lan-panel hidden" id="lanPanel">
+    <div class="lan-panel-label">Phone access</div>
+    <div class="lan-url" id="lanUrl"></div>
+    <div id="lanQr"></div>
   </div>
 
   <div class="setting-card">
@@ -408,6 +477,13 @@
       </div>
       <input type="number" id="settingPort" class="port-input" min="1024" max="65535">
     </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Phone access</div>
+        <div class="setting-note" id="firewallStatus">Checking...</div>
+      </div>
+      <button id="firewallBtn" class="firewall-btn" onclick="enablePhoneAccess()">Enable</button>
+    </div>
   </div>
 
   <button id="saveBtn" class="save-btn" onclick="saveSettings()">Save Settings</button>
@@ -425,6 +501,7 @@
 </div>
 
 <script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
   let lastData = null;
 
@@ -485,7 +562,10 @@
       + '<span class="label">' + label + '</span>'
       + '<span class="pct" style="color:var(--muted)">--</span>'
       + '</div>'
-      + '<div class="track"><div class="fill" style="width:0%;background:var(--border)"></div></div>'
+      + '<div class="track"><div class="fill" style="width:0%;background:var(--border)"></div>'
+      + '<span class="bar-label">Actual</span>'
+      + '<span class="bar-pct">0%</span>'
+      + '</div>'
       + '<div class="reset">Not tracked this period</div>'
       + '</div>');
 
@@ -517,15 +597,17 @@
         + '<span class="label">' + (compactLabel || label) + '</span>'
         + '<span class="time-rem">' + relC + '</span>'
         + '</div>'
-        // Actual bar (ghosted) + overlay
+        // Actual bar (ghosted) + overlays
         + '<div class="track">'
         + '<div class="fill" style="width:' + barW + '%;background:' + c + ';opacity:0.55"></div>'
         + '<span class="bar-label">Actual</span>'
+        + '<span class="bar-pct">' + fmtPct(pct) + '</span>'
         + '</div>'
-        // Projection bar (solid) + overlay
+        // Projection bar (solid) + overlays
         + '<div class="proj-track">'
         + '<div class="fill" style="width:' + projBarW + '%;background:' + pc + '"></div>'
         + '<span class="bar-label">Projected</span>'
+        + '<span class="bar-pct">' + fmtPct(proj) + '</span>'
         + '</div>'
         // Full-mode footer: proj sentence LEFT, reset countdown RIGHT
         + '<div class="card-footer full-only">'
@@ -542,7 +624,11 @@
       + '<span class="label">' + label + '</span>'
       + '<span class="pct" style="color:' + c + '">' + fmtPct(pct) + '</span>'
       + '</div>'
-      + '<div class="track"><div class="fill" style="width:' + barW + '%;background:' + c + '"></div></div>'
+      + '<div class="track">'
+      + '<div class="fill" style="width:' + barW + '%;background:' + c + '"></div>'
+      + '<span class="bar-label">Actual</span>'
+      + '<span class="bar-pct">' + fmtPct(pct) + '</span>'
+      + '</div>'
       + '<div class="reset">Resets in <b>' + rel + '</b></div>'
       + '</div>');
   }
@@ -616,11 +702,31 @@
       document.getElementById('settingAutostart').checked   = s.startWithWindows;
       document.getElementById('settingCloseToTray').checked = s.closeToTray;
       document.getElementById('settingPort').value          = s.serverPort;
+
+      // Firewall status
+      const statusEl = document.getElementById('firewallStatus');
+      const btnEl    = document.getElementById('firewallBtn');
+      if (s.firewallSetupDone) {
+        statusEl.textContent = 'Enabled (port ' + s.serverPort + ')';
+        btnEl.style.display  = 'none';
+      } else if (s.firewallDeclined) {
+        statusEl.textContent = 'Not enabled (previously declined)';
+        btnEl.textContent    = 'Enable';
+        btnEl.style.display  = '';
+        btnEl.disabled       = false;
+      } else {
+        statusEl.textContent = 'Not enabled';
+        btnEl.textContent    = 'Enable';
+        btnEl.style.display  = '';
+        btnEl.disabled       = false;
+      }
     } catch (e) {
       const msg = document.getElementById('saveMsg');
       msg.style.color = 'var(--red)';
       msg.textContent = 'Failed to load settings.';
     }
+
+    await loadNetworkInfo();
   }
 
   async function saveSettings() {
@@ -646,6 +752,63 @@
       msg.style.color = 'var(--red)';
       msg.textContent = 'Save failed.';
     } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ---- Phone access / LAN ----
+
+  let _qrInstance = null;
+
+  async function loadNetworkInfo() {
+    try {
+      const r = await fetch('/api/network-info');
+      if (!r.ok) return;
+      const info = await r.json();
+      const panel = document.getElementById('lanPanel');
+      if (info.lanIp) {
+        const url = 'http://' + info.lanIp + ':' + info.port;
+        document.getElementById('lanUrl').textContent = url;
+        panel.classList.remove('hidden');
+
+        const qrEl = document.getElementById('lanQr');
+        qrEl.innerHTML = '';
+        _qrInstance = new QRCode(qrEl, {
+          text: url,
+          width: 140,
+          height: 140,
+          colorDark: '#dde1f0',
+          colorLight: '#1b1b30',
+        });
+      } else {
+        panel.classList.add('hidden');
+      }
+    } catch (e) {
+      document.getElementById('lanPanel').classList.add('hidden');
+    }
+  }
+
+  async function enablePhoneAccess() {
+    const btn      = document.getElementById('firewallBtn');
+    const statusEl = document.getElementById('firewallStatus');
+    btn.disabled   = true;
+    statusEl.textContent = 'Requesting permission...';
+    try {
+      const r = await fetch('/api/firewall/enable', { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const result = await r.json();
+      if (result.status === 'added' || result.status === 'already_exists') {
+        statusEl.textContent = 'Enabled';
+        btn.style.display    = 'none';
+      } else if (result.status === 'declined') {
+        statusEl.textContent = 'Not enabled (declined)';
+        btn.disabled = false;
+      } else {
+        statusEl.textContent = 'Not enabled - requires a Windows admin account to open the firewall port';
+        btn.disabled = false;
+      }
+    } catch (e) {
+      statusEl.textContent = 'Not enabled (error)';
       btn.disabled = false;
     }
   }

@@ -1,3 +1,5 @@
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Windows;
 using ClaudeUsage.Hubs;
@@ -22,6 +24,7 @@ public partial class App : Application
 
     public bool IsQuitting { get; private set; }
     public SettingsService SettingsService { get; private set; } = null!;
+    private FirewallService _firewallService = null!;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -29,6 +32,7 @@ public partial class App : Application
         WinForms.Application.EnableVisualStyles();
 
         SettingsService = new SettingsService();
+        _firewallService = new FirewallService();
         _host = BuildWebApp();
         await _host.StartAsync();
 
@@ -37,6 +41,8 @@ public partial class App : Application
 
         _mainWindow = new MainWindow();
         _mainWindow.Show();
+
+        _ = Task.Run(CheckFirewallOnStartupAsync);
     }
 
     protected override async void OnExit(ExitEventArgs e)
@@ -121,6 +127,56 @@ public partial class App : Application
             _host?.Services.GetRequiredService<UsagePoller>().TriggerImmediatePoll();
     }
 
+    private async Task CheckFirewallOnStartupAsync()
+    {
+        var settings = SettingsService.Current;
+        var port = settings.ServerPort;
+
+        if (_firewallService.RuleExists(port))
+        {
+            if (!settings.FirewallSetupDone)
+                SettingsService.Save(settings with { FirewallSetupDone = true });
+            return;
+        }
+
+        if (settings.FirewallDeclined)
+            return;
+
+        var result = await _firewallService.TryAddRuleAsync(port);
+        switch (result)
+        {
+            case FirewallResult.Added:
+                SettingsService.Save(SettingsService.Current with { FirewallSetupDone = true, FirewallDeclined = false });
+                break;
+            case FirewallResult.Declined:
+                SettingsService.Save(SettingsService.Current with { FirewallDeclined = true });
+                break;
+        }
+    }
+
+    private static string? GetLanIp()
+    {
+        return NetworkInterface.GetAllNetworkInterfaces()
+            .Where(ni => ni.OperationalStatus == OperationalStatus.Up
+                      && ni.NetworkInterfaceType != NetworkInterfaceType.Loopback
+                      && ni.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
+            .SelectMany(ni => ni.GetIPProperties().UnicastAddresses)
+            .Where(ua => ua.Address.AddressFamily == AddressFamily.InterNetwork
+                      && !ua.Address.ToString().StartsWith("169.254"))
+            .Select(ua => ua.Address.ToString())
+            .FirstOrDefault(ip => ip.StartsWith("192.168.")
+                               || ip.StartsWith("10.")
+                               || IsPrivate172(ip));
+    }
+
+    private static bool IsPrivate172(string ip)
+    {
+        var parts = ip.Split('.');
+        return parts.Length == 4
+            && int.TryParse(parts[1], out var second)
+            && second >= 16 && second <= 31;
+    }
+
     private IHost BuildWebApp()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -151,6 +207,7 @@ public partial class App : Application
             o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
 
         builder.Services.AddSingleton(SettingsService);
+        builder.Services.AddSingleton(_firewallService);
         builder.Services.AddSingleton<UsageState>();
         builder.Services.AddSingleton<UsageService>();
         builder.Services.AddSingleton<UsagePoller>();
@@ -175,6 +232,36 @@ public partial class App : Application
         {
             settings.Save(body);
             return Results.Ok(settings.Current with { StartWithWindows = settings.GetActualAutostart() });
+        });
+
+        app.MapGet("/api/network-info", (SettingsService settings) =>
+            Results.Ok(new { lanIp = GetLanIp(), port = settings.Current.ServerPort }));
+
+        app.MapPost("/api/firewall/enable", async (SettingsService settingsSvc, FirewallService firewallSvc) =>
+        {
+            var port = settingsSvc.Current.ServerPort;
+
+            if (firewallSvc.RuleExists(port))
+            {
+                settingsSvc.Save(settingsSvc.Current with { FirewallSetupDone = true, FirewallDeclined = false });
+                return Results.Ok(new { status = "already_exists" });
+            }
+
+            // Clear declined so the attempt is recorded fresh
+            settingsSvc.Save(settingsSvc.Current with { FirewallDeclined = false });
+
+            var result = await firewallSvc.TryAddRuleAsync(port);
+            switch (result)
+            {
+                case FirewallResult.Added:
+                    settingsSvc.Save(settingsSvc.Current with { FirewallSetupDone = true, FirewallDeclined = false });
+                    return Results.Ok(new { status = "added" });
+                case FirewallResult.Declined:
+                    settingsSvc.Save(settingsSvc.Current with { FirewallDeclined = true });
+                    return Results.Ok(new { status = "declined" });
+                default:
+                    return Results.Ok(new { status = "error" });
+            }
         });
 
         return app;
