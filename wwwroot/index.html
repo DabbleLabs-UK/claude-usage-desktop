@@ -616,6 +616,11 @@
     <div class="explain-title">Spare ratio label</div>
     <div class="explain-text" id="explainRatio"></div>
   </div>
+  <div class="explain-block" id="spareRatioSvgBlock">
+    <div class="explain-title">Spare ratio &mdash; zoomed</div>
+    <div id="spareRatioSvg"></div>
+    <div class="explain-text" id="explainSvg"></div>
+  </div>
   <div class="explain-block">
     <div class="explain-title">Elapsed-time line</div>
     <div class="explain-text" id="explainLine"></div>
@@ -836,13 +841,64 @@
     // Refresh the detail card preview if the detail view is currently open
     if (_openCardKey) {
       const d = _cardDataMap[_openCardKey];
-      if (d && d.w) document.getElementById('detailCard').innerHTML = card(d.label, d.w, d.windowMs, null, false);
+      if (d && d.w) {
+        document.getElementById('detailCard').innerHTML = card(d.label, d.w, d.windowMs, null, false);
+        const rs = new Date(d.w.resetsAt).getTime();
+        const el = Math.max(0.01, Math.min(1, (Date.now() - (rs - d.windowMs)) / d.windowMs));
+        const pr = d.w.utilization / el;
+        const rp = (1 - el) * 100;
+        const hw = 100 - pr;
+        const rr = rp > 0.5 ? (hw / rp) * 100 : (hw > 0 ? 100 : 0);
+        const dr = Math.min(100, Math.round(rr));
+        document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(el, dr, ratioColor(rr));
+      }
     }
   }
 
   setInterval(() => { if (lastData) render(lastData); }, 60000);
 
   // ---- Card detail view ----
+
+  // Builds the SVG zoom diagram for the detail view spare-ratio block.
+  // Bar 2 (top) = schematic of the projected bar across the full period.
+  // Bar 3 (bottom) = the remaining slice of bar 2, stretched to full width.
+  // Two dashed lines connect the zoom region: left line from "now" point on
+  // bar 2 to the left edge of bar 3; right line from the right edge of both.
+  // Bar 3 fill (from left) = dispRatio% in the threshold colour -- directly
+  // encodes the spare ratio: a full bar means lots of spare, empty = none.
+  function buildSpareRatioSvg(elapsed, dispRatio, rc) {
+    const bx = 6, BW = 388, y2 = 6, BH = 14, y3 = 50;
+    const ex  = bx + BW * elapsed;
+    const spW = BW * Math.max(0, Math.min(1, dispRatio / 100));
+    const bg  = '#252540';
+    const dim = '#60688a';
+    const f   = n => n.toFixed(1);
+    return '<svg viewBox="0 0 400 90" xmlns="http://www.w3.org/2000/svg" width="100%" style="display:block;margin:4px 0">'
+      // Bar 2 background (full period)
+      + '<rect x="' + bx + '" y="' + y2 + '" width="' + BW + '" height="' + BH + '" rx="3" fill="' + bg + '"/>'
+      // Bar 2: elapsed portion (dim)
+      + '<rect x="' + bx + '" y="' + y2 + '" width="' + f(BW * elapsed) + '" height="' + BH + '" rx="3" fill="' + dim + '" opacity="0.45"/>'
+      // Bar 2: remaining zone (slightly lighter to show what is being zoomed)
+      + '<rect x="' + f(ex) + '" y="' + y2 + '" width="' + f(BW * (1 - elapsed)) + '" height="' + BH + '" rx="3" fill="#2a2a52"/>'
+      // Bar 2: now-marker vertical line
+      + '<line x1="' + f(ex) + '" y1="' + y2 + '" x2="' + f(ex) + '" y2="' + (y2 + BH) + '" stroke="rgba(255,255,255,0.5)" stroke-width="2"/>'
+      // "Now" label under bar 2 marker
+      + '<text x="' + f(ex) + '" y="' + (y2 + BH + 11) + '" text-anchor="middle" fill="' + dim + '" font-size="8" font-family="system-ui,sans-serif">Now</text>'
+      // Left connecting line: now-point on bar 2 -> left edge of bar 3
+      + '<line x1="' + f(ex) + '" y1="' + (y2 + BH) + '" x2="' + bx + '" y2="' + y3 + '" stroke="' + dim + '" stroke-width="1" stroke-dasharray="4,3"/>'
+      // Right connecting line: right edge of bar 2 -> right edge of bar 3 (vertical)
+      + '<line x1="' + (bx + BW) + '" y1="' + (y2 + BH) + '" x2="' + (bx + BW) + '" y2="' + y3 + '" stroke="' + dim + '" stroke-width="1" stroke-dasharray="4,3"/>'
+      // Bar 3 background (remaining period, zoomed)
+      + '<rect x="' + bx + '" y="' + y3 + '" width="' + BW + '" height="' + BH + '" rx="3" fill="' + bg + '"/>'
+      // Bar 3 spare fill from left: spareRatio% in threshold colour
+      + (spW > 0.5 ? '<rect x="' + bx + '" y="' + y3 + '" width="' + f(spW) + '" height="' + BH + '" rx="3" fill="' + rc + '"/>' : '')
+      // Bar 3 axis labels
+      + '<text x="' + bx + '" y="' + (y3 + BH + 12) + '" text-anchor="start" fill="' + dim + '" font-size="8" font-family="system-ui,sans-serif">Now</text>'
+      + '<text x="' + (bx + BW) + '" y="' + (y3 + BH + 12) + '" text-anchor="end" fill="' + dim + '" font-size="8" font-family="system-ui,sans-serif">Period end</text>'
+      // Bar 3 centred spare% label
+      + '<text x="' + f(bx + BW / 2) + '" y="' + (y3 + BH + 12) + '" text-anchor="middle" fill="' + rc + '" font-size="9" font-family="system-ui,sans-serif" font-weight="700">' + dispRatio + '% spare</text>'
+      + '</svg>';
+  }
 
   window.openDetail = function(cardKey) {
     const d = _cardDataMap[cardKey];
@@ -852,6 +908,24 @@
     const win = windowMs === 5 * 3600 * 1000 ? '5-hour' : '7-day';
     document.getElementById('detailTitle').textContent = label;
     document.getElementById('detailCard').innerHTML = card(label, w, windowMs, null, false);
+
+    // Compute spare-ratio values for the SVG (same formulas as card())
+    const resetsAt  = new Date(w.resetsAt).getTime();
+    const elapsed   = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
+    const proj      = w.utilization / elapsed;
+    const remPeriod = (1 - elapsed) * 100;
+    const headroom  = 100 - proj;
+    const rawRatio  = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
+    const dispRatio = Math.min(100, Math.round(rawRatio));
+    const rc        = ratioColor(rawRatio);
+    document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(elapsed, dispRatio, rc);
+    document.getElementById('explainSvg').textContent =
+      'Bar 2 (top) is a schematic of the projected bar across the full window -- '
+      + 'left = period start, right = period end, the marker is now. '
+      + 'Bar 3 (bottom) zooms into only the remaining slice (from now to period end), '
+      + 'stretched to full width. The coloured fill shows how much of that remaining '
+      + 'time is predicted to stay spare: ' + dispRatio + '% (shown above as the spare ratio). '
+      + 'Full bar = all remaining capacity is spare; empty bar = none.';
     document.getElementById('explainActual').textContent =
       'Your actual usage so far in this ' + win + ' window, as a % of the rate limit. '
       + 'Semi-transparent so it stays visually secondary to the projection. Resets in ' + timeUntil(w.resetsAt) + '.';
