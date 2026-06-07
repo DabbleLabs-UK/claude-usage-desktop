@@ -525,7 +525,7 @@
 
 <div id="settingsView" class="settings-view hidden">
   <div class="settings-header">
-    <button class="back-btn" onclick="closeSettings()">&#8592; Back</button>
+    <button class="back-btn" onclick="history.back()">&#8592; Back</button>
     <span class="settings-title">Settings</span>
   </div>
 
@@ -600,10 +600,10 @@
 
 <div id="detailView" class="detail-view hidden">
   <div class="detail-header">
-    <button class="back-btn" onclick="closeDetail()">&#8592; Back</button>
+    <button class="back-btn" onclick="history.back()">&#8592; Back</button>
     <span class="detail-title" id="detailTitle"></span>
   </div>
-  <div id="detailCard" onclick="closeDetail()" style="cursor:pointer"></div>
+  <div id="detailCard" onclick="history.back()" style="cursor:pointer"></div>
   <div class="explain-block">
     <div class="explain-title">Actual bar (ghosted)</div>
     <div class="explain-text" id="explainActual"></div>
@@ -743,7 +743,7 @@
       const remPeriod  = (1 - elapsed) * 100;
       const headroom   = 100 - proj;
       const rawRatio   = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
-      const dispRatio  = Math.min(100, Math.round(rawRatio));
+      const dispRatio  = Math.round(rawRatio);
       const rc         = ratioColor(rawRatio);
       const ratioInRed = rawRatio <= _thresholds.red * 100 || rawRatio <= 0;
       const ratioEmoji = ratioInRed ? '❌' : '✅';
@@ -849,7 +849,7 @@
         const rp = (1 - el) * 100;
         const hw = 100 - pr;
         const rr = rp > 0.5 ? (hw / rp) * 100 : (hw > 0 ? 100 : 0);
-        const dr = Math.min(100, Math.round(rr));
+        const dr = Math.round(rr);
         document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(el, dr, ratioColor(rr));
       }
     }
@@ -903,6 +903,7 @@
   window.openDetail = function(cardKey) {
     const d = _cardDataMap[cardKey];
     if (!d || !d.w) return;
+    history.pushState({ view: 'detail', cardKey: cardKey }, '');
     _openCardKey = cardKey;
     const { label, w, windowMs } = d;
     const win = windowMs === 5 * 3600 * 1000 ? '5-hour' : '7-day';
@@ -916,7 +917,7 @@
     const remPeriod = (1 - elapsed) * 100;
     const headroom  = 100 - proj;
     const rawRatio  = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
-    const dispRatio = Math.min(100, Math.round(rawRatio));
+    const dispRatio = Math.round(rawRatio);
     const rc        = ratioColor(rawRatio);
     document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(elapsed, dispRatio, rc);
     document.getElementById('explainSvg').textContent =
@@ -1051,9 +1052,22 @@
     else { console.warn('[CU] Failed to fetch initial instance id'); }
   });
 
+  // ---- In-app navigation history (intercepts OS/hardware back) ----
+
+  history.replaceState({ view: 'main' }, '');
+
+  window.addEventListener('popstate', function(e) {
+    const view = (e.state && e.state.view) || 'main';
+    if (view === 'main') {
+      if (_openCardKey !== null) closeDetail();
+      else if (!document.getElementById('settingsView').classList.contains('hidden')) closeSettings();
+    }
+  });
+
   // ---- Settings ----
 
   window.openSettings = function() {
+    history.pushState({ view: 'settings' }, '');
     document.getElementById('mainView').classList.add('hidden');
     document.getElementById('settingsView').classList.remove('hidden');
     loadSettings();
@@ -1152,7 +1166,7 @@
       if (lastData) render(lastData);
       msg.style.color = 'var(--green)';
       msg.textContent = 'Saved.';
-      setTimeout(closeSettings, 600);
+      setTimeout(() => history.back(), 600);
     } catch (e) {
       msg.style.color = 'var(--red)';
       msg.textContent = 'Save failed.';
