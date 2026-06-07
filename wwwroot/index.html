@@ -499,9 +499,12 @@
     return 'var(--green)';
   }
 
-  function projColor(pct) {
-    if (pct > 100) return 'var(--red)';
-    if (pct >= 80) return 'var(--yellow)';
+  // elapsed: elapsedFraction [0.01,1] from the card computation
+  function projColor(proj, elapsed) {
+    const headroom        = 100 - proj;
+    const remainingPeriod = (1 - elapsed) * 100;
+    if (headroom <= 0.10 * remainingPeriod) return 'var(--red)';
+    if (headroom <= 0.25 * remainingPeriod) return 'var(--orange)';
     return 'var(--green)';
   }
 
@@ -565,7 +568,7 @@
       const elapsed  = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
       const proj     = pct / elapsed;
       const projBarW = Math.min(proj, 100).toFixed(1);
-      const pc       = projColor(proj);
+      const pc       = projColor(proj, elapsed);
       const projMsg  = proj > 100
         ? 'Projected: ' + Math.round(proj) + '% -- over limit'
         : 'Projected: ' + Math.round(proj) + '% by reset';
