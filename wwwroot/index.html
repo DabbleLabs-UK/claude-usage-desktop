@@ -32,7 +32,6 @@
       flex-direction: column;
     }
 
-    /* Bottom toolbar -- holds status text + gear, no title */
     .toolbar {
       padding: 10px 16px;
       background: var(--surface);
@@ -135,7 +134,16 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Compact-mode time-remaining (right side of compact head) */
+    .time-rem {
+      font-size: 0.9rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+    }
+
     .track {
+      position: relative;
       height: 5px;
       background: var(--border);
       border-radius: 3px;
@@ -144,6 +152,7 @@
     }
 
     .proj-track {
+      position: relative;
       height: 3px;
       background: var(--border);
       border-radius: 2px;
@@ -158,7 +167,28 @@
       transition: width 0.5s ease;
     }
 
-    /* proj-text and reset sit side-by-side inside .card-footer */
+    /* Bar overlay label: hidden in full mode */
+    .bar-label {
+      display: none;
+      position: absolute;
+      left: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 0.58rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: rgba(255, 255, 255, 0.82);
+      pointer-events: none;
+      user-select: none;
+      white-space: nowrap;
+      line-height: 1;
+    }
+
+    /* Compact-mode header row: hidden in full mode */
+    .compact-only { display: none; }
+
+    /* proj-text and reset sit side-by-side in .card-footer */
     .card-footer {
       display: flex;
       justify-content: space-between;
@@ -199,6 +229,28 @@
       font-size: 0.82rem;
       font-weight: 700;
       color: var(--text);
+    }
+
+    /* ── Compact mode ──────────────────────────────────────────────────
+       Triggers when the viewport is phone-width narrow (<= 400px) OR
+       phone-portrait-with-keyboard-up short (<= 500px).
+       Default window (420 x 720) stays in full mode; drag narrower or
+       shorter to preview the phone layout.
+    ──────────────────────────────────────────────────────────────────── */
+    @media (max-width: 400px), (max-height: 500px) {
+      main { padding: 8px; gap: 6px; }
+
+      .card { padding: 9px 11px; }
+      .card-head { margin-bottom: 6px; }
+
+      /* Taller bars so overlay text has room */
+      .track     { height: 18px; margin-bottom: 4px; }
+      .proj-track { height: 14px; margin-top: 0; margin-bottom: 4px; }
+
+      .bar-label  { display: block; }
+
+      .compact-only { display: flex; }
+      .full-only    { display: none !important; }
     }
 
     /* Settings view */
@@ -362,7 +414,6 @@
   <div id="saveMsg" class="save-msg"></div>
 </div>
 
-<!-- bottom toolbar: status text on left, gear on right, no title -->
 <div class="toolbar">
   <div class="meta">
     <div class="meta-text">
@@ -377,7 +428,6 @@
 <script>
   let lastData = null;
 
-  // Colour helpers
   function color(pct) {
     if (pct >= 100) return 'var(--red)';
     if (pct >= 85)  return 'var(--orange)';
@@ -391,6 +441,7 @@
     return 'var(--green)';
   }
 
+  // Full-mode relative time: "3h 39m", "2d 4h", etc.
   function timeUntil(iso) {
     const ms = new Date(iso) - Date.now();
     if (ms <= 0) return 'now';
@@ -399,6 +450,19 @@
     if (h >= 24) { const d = Math.floor(h / 24); return d + 'd ' + (h % 24) + 'h'; }
     if (h > 0) return h + 'h ' + m + 'm';
     return m + 'm';
+  }
+
+  // Compact-mode time: always shows hours (even 0h), leading-zero mins,
+  // days only when non-zero. e.g. "4h 03m", "2d 14h 03m", "0h 07m".
+  function timeCompact(iso) {
+    const ms = new Date(iso) - Date.now();
+    if (ms <= 0) return '0h 00m';
+    const totalMin = Math.floor(ms / 60000);
+    const days  = Math.floor(totalMin / 1440);
+    const hours = Math.floor((totalMin % 1440) / 60);
+    const mins  = totalMin % 60;
+    const mm = String(mins).padStart(2, '0');
+    return (days > 0 ? days + 'd ' : '') + hours + 'h ' + mm + 'm';
   }
 
   function fmtPct(p) {
@@ -412,7 +476,9 @@
     return code + ' ';
   }
 
-  function card(label, w, windowMs) {
+  // windowMs: 5-hour or 7-day window in ms (falsy = no projection)
+  // compactLabel: short label shown in compact mode ("Session", "Week")
+  function card(label, w, windowMs, compactLabel) {
     if (!w) return (
       '<div class="card dim">'
       + '<div class="card-head">'
@@ -423,42 +489,53 @@
       + '<div class="reset">Not tracked this period</div>'
       + '</div>');
 
-    const pct = w.utilization;
-    const c = color(pct);
+    const pct  = w.utilization;
+    const c    = color(pct);
     const barW = Math.min(pct, 100).toFixed(1);
-    const rel = timeUntil(w.resetsAt);
-    const abs = new Date(w.resetsAt).toLocaleString();
-    const utcTime = new Date(w.resetsAt).toUTCString().slice(17, 22);
-    const resetSpan = 'Resets in <b>' + rel + '</b> &nbsp;<span title="' + abs + '">(' + utcTime + ' UTC)</span>';
+    const rel  = timeUntil(w.resetsAt);
 
     if (windowMs) {
-      // Compute projection
+      const relC     = timeCompact(w.resetsAt);
       const resetsAt = new Date(w.resetsAt).getTime();
-      const elapsed = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
-      const proj = pct / elapsed;
+      const elapsed  = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
+      const proj     = pct / elapsed;
       const projBarW = Math.min(proj, 100).toFixed(1);
-      const pc = projColor(proj);
-      const projMsg = proj > 100
+      const pc       = projColor(proj);
+      const projMsg  = proj > 100
         ? 'Projected: ' + Math.round(proj) + '% -- over limit'
         : 'Projected: ' + Math.round(proj) + '% by reset';
 
-      // Actual bar = ghosted (opacity:0.55); projection bar = solid (prominent)
       return (
         '<div class="card">'
-        + '<div class="card-head">'
+        // Full-mode head: label + large percentage
+        + '<div class="card-head full-only">'
         + '<span class="label">' + label + '</span>'
         + '<span class="pct" style="color:' + c + '">' + fmtPct(pct) + '</span>'
         + '</div>'
-        + '<div class="track"><div class="fill" style="width:' + barW + '%;background:' + c + ';opacity:0.55"></div></div>'
-        + '<div class="proj-track"><div class="fill" style="width:' + projBarW + '%;background:' + pc + '"></div></div>'
-        // Proj text left, reset text right -- single line
-        + '<div class="card-footer">'
+        // Compact-mode head: short label + time remaining
+        + '<div class="card-head compact-only">'
+        + '<span class="label">' + (compactLabel || label) + '</span>'
+        + '<span class="time-rem">' + relC + '</span>'
+        + '</div>'
+        // Actual bar (ghosted) + overlay
+        + '<div class="track">'
+        + '<div class="fill" style="width:' + barW + '%;background:' + c + ';opacity:0.55"></div>'
+        + '<span class="bar-label">Actual</span>'
+        + '</div>'
+        // Projection bar (solid) + overlay
+        + '<div class="proj-track">'
+        + '<div class="fill" style="width:' + projBarW + '%;background:' + pc + '"></div>'
+        + '<span class="bar-label">Projected</span>'
+        + '</div>'
+        // Full-mode footer: proj sentence LEFT, reset countdown RIGHT
+        + '<div class="card-footer full-only">'
         + '<span class="proj-text" style="color:' + pc + '">' + projMsg + '</span>'
-        + '<span class="reset">' + resetSpan + '</span>'
+        + '<span class="reset">Resets in <b>' + rel + '</b></span>'
         + '</div>'
         + '</div>');
     }
 
+    // Non-windowed card (Sonnet, Opus) -- no projection, no compact variant
     return (
       '<div class="card">'
       + '<div class="card-head">'
@@ -466,14 +543,14 @@
       + '<span class="pct" style="color:' + c + '">' + fmtPct(pct) + '</span>'
       + '</div>'
       + '<div class="track"><div class="fill" style="width:' + barW + '%;background:' + c + '"></div></div>'
-      + '<div class="reset">' + resetSpan + '</div>'
+      + '<div class="reset">Resets in <b>' + rel + '</b></div>'
       + '</div>');
   }
 
   function billingCard(eu) {
     if (!eu) return '';
-    const sym = currencySymbol(eu.currency);
-    const pct = eu.utilization;
+    const sym  = currencySymbol(eu.currency);
+    const pct  = eu.utilization;
     const barW = Math.min(pct, 100).toFixed(1);
     return (
       '<div class="billing">'
@@ -488,8 +565,8 @@
   function render(data) {
     lastData = data;
     document.getElementById('mainView').innerHTML =
-      card('5-hour',         data.fiveHour,      5 * 3600 * 1000) +
-      card('7-day',          data.sevenDay,       7 * 24 * 3600 * 1000) +
+      card('5-hour',         data.fiveHour,      5 * 3600 * 1000,       'Session') +
+      card('7-day',          data.sevenDay,       7 * 24 * 3600 * 1000,  'Week') +
       card('Sonnet (7-day)', data.sevenDaySonnet) +
       card('Opus (7-day)',   data.sevenDayOpus) +
       billingCard(data.extraUsage);
