@@ -154,8 +154,46 @@ public partial class App : Application
         }
     }
 
+    private static readonly string[] VirtualAdapterKeywords =
+    [
+        "VirtualBox", "VMware", "Hyper-V", "vEthernet", "WSL",
+        "Bluetooth", "Loopback", "TAP", "Virtual"
+    ];
+
+    private static bool IsVirtualAdapter(NetworkInterface ni) =>
+        VirtualAdapterKeywords.Any(kw =>
+            ni.Description.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
+            ni.Name.Contains(kw, StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasIpv4Gateway(NetworkInterface ni) =>
+        ni.GetIPProperties().GatewayAddresses
+            .Any(gw => gw.Address.AddressFamily == AddressFamily.InterNetwork);
+
     private static string? GetLanIp()
     {
+        var real = NetworkInterface.GetAllNetworkInterfaces()
+            .Where(ni => ni.OperationalStatus == OperationalStatus.Up
+                      && ni.NetworkInterfaceType != NetworkInterfaceType.Loopback
+                      && ni.NetworkInterfaceType != NetworkInterfaceType.Tunnel
+                      && !IsVirtualAdapter(ni))
+            .OrderByDescending(HasIpv4Gateway)
+            .ThenByDescending(ni => ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211
+                                 || ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet)
+            .ToList();
+
+        foreach (var ni in real)
+        {
+            var ip = ni.GetIPProperties().UnicastAddresses
+                .Where(ua => ua.Address.AddressFamily == AddressFamily.InterNetwork
+                          && !ua.Address.ToString().StartsWith("169.254"))
+                .Select(ua => ua.Address.ToString())
+                .FirstOrDefault(addr => addr.StartsWith("192.168.")
+                                     || addr.StartsWith("10.")
+                                     || IsPrivate172(addr));
+            if (ip != null) return ip;
+        }
+
+        // Fall back: any private non-APIPA IPv4 (ignores virtual-adapter filter)
         return NetworkInterface.GetAllNetworkInterfaces()
             .Where(ni => ni.OperationalStatus == OperationalStatus.Up
                       && ni.NetworkInterfaceType != NetworkInterfaceType.Loopback
@@ -164,9 +202,9 @@ public partial class App : Application
             .Where(ua => ua.Address.AddressFamily == AddressFamily.InterNetwork
                       && !ua.Address.ToString().StartsWith("169.254"))
             .Select(ua => ua.Address.ToString())
-            .FirstOrDefault(ip => ip.StartsWith("192.168.")
-                               || ip.StartsWith("10.")
-                               || IsPrivate172(ip));
+            .FirstOrDefault(addr => addr.StartsWith("192.168.")
+                                 || addr.StartsWith("10.")
+                                 || IsPrivate172(addr));
     }
 
     private static bool IsPrivate172(string ip)
