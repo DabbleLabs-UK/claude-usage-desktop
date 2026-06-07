@@ -490,7 +490,17 @@
 <script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
-  let lastData = null;
+  let lastData    = null;
+  let _instanceId = null;
+
+  async function fetchInstanceId() {
+    try {
+      const r = await fetch('/api/instance');
+      if (!r.ok) return null;
+      const d = await r.json();
+      return d.instanceId || null;
+    } catch { return null; }
+  }
 
   function color(pct) {
     if (pct >= 100) return 'var(--red)';
@@ -652,6 +662,16 @@
 
   conn.on('usageUpdated', render);
 
+  // On reconnect: if the server has a new instance id it restarted with new code -> reload.
+  conn.onreconnected(async () => {
+    const newId = await fetchInstanceId();
+    if (newId && _instanceId && newId !== _instanceId) {
+      location.reload();
+      return;
+    }
+    if (newId) _instanceId = newId;
+  });
+
   (async function connect() {
     try { await conn.start(); }
     catch (e) { console.warn('SignalR connect failed, retrying in 5s', e); setTimeout(connect, 5000); }
@@ -661,6 +681,9 @@
     .then(r => r.ok ? r.json() : null)
     .then(d => { if (d) render(d); })
     .catch(e => console.warn('Initial fetch failed:', e));
+
+  // Store the instance id on first load so reconnects can compare against it.
+  fetchInstanceId().then(id => { if (id) _instanceId = id; });
 
   // ---- Settings ----
 

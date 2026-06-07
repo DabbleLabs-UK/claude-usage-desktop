@@ -18,6 +18,8 @@ namespace ClaudeUsage;
 
 public partial class App : Application
 {
+    private static readonly string InstanceId = Guid.NewGuid().ToString("N");
+
     private IHost? _host;
     private WinForms.NotifyIcon? _notifyIcon;
     private MainWindow? _mainWindow;
@@ -274,6 +276,9 @@ public partial class App : Application
 
         app.MapGet("/api/network-info", (SettingsService settings) =>
             Results.Ok(new { lanIp = GetLanIp(), port = settings.Current.ServerPort }));
+
+        app.MapGet("/api/instance", () =>
+            Results.Ok(new { instanceId = InstanceId }));
 
         app.MapPost("/api/firewall/enable", async (SettingsService settingsSvc, FirewallService firewallSvc) =>
         {
