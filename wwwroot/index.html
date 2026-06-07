@@ -88,10 +88,10 @@
 
     main {
       flex: 1;
-      padding: 12px;
+      padding: 8px;
       display: flex;
       flex-direction: column;
-      gap: 9px;
+      gap: 6px;
       overflow-y: auto;
     }
 
@@ -108,7 +108,7 @@
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 11px;
-      padding: 13px 15px;
+      padding: 9px 13px;
     }
 
     .card.dim { opacity: 0.42; }
@@ -117,7 +117,7 @@
       display: flex;
       justify-content: space-between;
       align-items: baseline;
-      margin-bottom: 9px;
+      margin-bottom: 5px;
     }
 
     .label {
@@ -147,7 +147,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 5px;
+      margin-bottom: 3px;
     }
 
     .track {
@@ -240,10 +240,10 @@
        shorter to preview the phone layout.
     ──────────────────────────────────────────────────────────────────── */
     @media (max-width: 400px), (max-height: 500px) {
-      main { padding: 8px; gap: 6px; }
+      main { padding: 5px; gap: 4px; }
 
-      .card { padding: 9px 11px; }
-      .card-head { margin-bottom: 6px; }
+      .card { padding: 6px 10px; }
+      .card-head { margin-bottom: 3px; }
 
       /* Slightly taller bars in compact so text has more room */
       .track      { height: 18px; }
@@ -466,6 +466,20 @@
     </div>
     <div class="setting-row">
       <div>
+        <div class="setting-label">Orange alert (%)</div>
+        <div class="setting-note">Projection bar turns orange when headroom &lt;= this % of remaining period (default 25)</div>
+      </div>
+      <input type="number" id="settingOrangeThreshold" class="port-input" min="1" max="100" step="1">
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Red alert (%)</div>
+        <div class="setting-note">Projection bar turns red when headroom &lt;= this % of remaining period (default 10)</div>
+      </div>
+      <input type="number" id="settingRedThreshold" class="port-input" min="0" max="99" step="1">
+    </div>
+    <div class="setting-row">
+      <div>
         <div class="setting-label">Phone access</div>
         <div class="setting-note" id="firewallStatus">Checking...</div>
       </div>
@@ -492,6 +506,7 @@
 <script>
   let lastData    = null;
   let _instanceId = null;
+  let _thresholds = { orange: 0.25, red: 0.10 };
 
   async function fetchInstanceId() {
     try {
@@ -513,8 +528,8 @@
   function projColor(proj, elapsed) {
     const headroom        = 100 - proj;
     const remainingPeriod = (1 - elapsed) * 100;
-    if (headroom <= 0.10 * remainingPeriod) return 'var(--red)';
-    if (headroom <= 0.25 * remainingPeriod) return 'var(--orange)';
+    if (headroom <= _thresholds.red    * remainingPeriod) return 'var(--red)';
+    if (headroom <= _thresholds.orange * remainingPeriod) return 'var(--orange)';
     return 'var(--green)';
   }
 
@@ -707,6 +722,12 @@
       document.getElementById('settingAutostart').checked   = s.startWithWindows;
       document.getElementById('settingCloseToTray').checked = s.closeToTray;
       document.getElementById('settingPort').value          = s.serverPort;
+      const ot = typeof s.orangeThreshold === 'number' ? s.orangeThreshold : 0.25;
+      const rt = typeof s.redThreshold    === 'number' ? s.redThreshold    : 0.10;
+      document.getElementById('settingOrangeThreshold').value = Math.round(ot * 100);
+      document.getElementById('settingRedThreshold').value    = Math.round(rt * 100);
+      _thresholds.orange = ot;
+      _thresholds.red    = rt;
 
       // Firewall status
       const statusEl = document.getElementById('firewallStatus');
@@ -740,10 +761,17 @@
     btn.disabled = true;
     msg.textContent = '';
     try {
+      let orangePct = parseFloat(document.getElementById('settingOrangeThreshold').value);
+      let redPct    = parseFloat(document.getElementById('settingRedThreshold').value);
+      if (!isFinite(orangePct) || orangePct < 1  || orangePct > 100) orangePct = 25;
+      if (!isFinite(redPct)    || redPct    < 0  || redPct    > 99)  redPct    = 10;
+      if (redPct >= orangePct) redPct = Math.max(0, orangePct - 1);
       const body = {
         startWithWindows: document.getElementById('settingAutostart').checked,
         closeToTray:      document.getElementById('settingCloseToTray').checked,
         serverPort:       parseInt(document.getElementById('settingPort').value, 10),
+        orangeThreshold:  orangePct / 100,
+        redThreshold:     redPct    / 100,
       };
       const r = await fetch('/api/settings', {
         method: 'POST',
@@ -751,6 +779,9 @@
         body: JSON.stringify(body),
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
+      _thresholds.orange = body.orangeThreshold;
+      _thresholds.red    = body.redThreshold;
+      if (lastData) render(lastData);
       msg.style.color = 'var(--green)';
       msg.textContent = 'Saved.';
     } catch (e) {
