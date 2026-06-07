@@ -7,4 +7,6 @@ public record AppSettings(
     bool FirewallSetupDone = false,
     bool FirewallDeclined = false,
     double OrangeThreshold = 0.25,
-    double RedThreshold = 0.10);
+    double RedThreshold = 0.10,
+    double YellowThreshold = 0.50,
+    double YellowGreenThreshold = 0.75);

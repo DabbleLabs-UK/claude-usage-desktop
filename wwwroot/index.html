@@ -16,10 +16,11 @@
       --muted:   #60688a;
       --dim:     #8890b0;
       --accent:  #a78bfa;
-      --green:   #34d399;
-      --yellow:  #fbbf24;
-      --orange:  #f97316;
-      --red:     #ef4444;
+      --green:        #34d399;
+      --yellow-green: #a3e635;
+      --yellow:       #fbbf24;
+      --orange:       #f97316;
+      --red:          #ef4444;
     }
 
     body {
@@ -218,20 +219,16 @@
       flex: 1;
     }
 
-    /* Centred label on the projection bar showing spare-ratio % */
-    .proj-ratio-label {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 0.58rem;
+    /* Spare ratio: standalone coloured number shown below the bars */
+    .spare-ratio-line {
+      font-size: 0.7rem;
+      color: var(--dim);
+      margin: 2px 0 3px;
+      line-height: 1.3;
+    }
+    .spare-ratio-value {
       font-weight: 700;
-      white-space: nowrap;
-      color: rgba(255, 255, 255, 0.92);
-      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
-      pointer-events: none;
-      user-select: none;
-      line-height: 1;
+      font-variant-numeric: tabular-nums;
     }
 
     /* Compact-mode header row: hidden in full mode */
@@ -562,17 +559,31 @@
     </div>
     <div class="setting-row">
       <div>
+        <div class="setting-label">Red alert (%)</div>
+        <div class="setting-note">Spare ratio turns red below this (default 10)</div>
+      </div>
+      <input type="number" id="settingRedThreshold" class="port-input" min="0" max="99" step="1">
+    </div>
+    <div class="setting-row">
+      <div>
         <div class="setting-label">Orange alert (%)</div>
-        <div class="setting-note">Projection bar turns orange when headroom &lt;= this % of remaining period (default 25)</div>
+        <div class="setting-note">Spare ratio turns orange below this (default 25)</div>
       </div>
       <input type="number" id="settingOrangeThreshold" class="port-input" min="1" max="100" step="1">
     </div>
     <div class="setting-row">
       <div>
-        <div class="setting-label">Red alert (%)</div>
-        <div class="setting-note">Projection bar turns red when headroom &lt;= this % of remaining period (default 10)</div>
+        <div class="setting-label">Yellow alert (%)</div>
+        <div class="setting-note">Spare ratio turns yellow below this (default 50)</div>
       </div>
-      <input type="number" id="settingRedThreshold" class="port-input" min="0" max="99" step="1">
+      <input type="number" id="settingYellowThreshold" class="port-input" min="1" max="100" step="1">
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Yellow-green alert (%)</div>
+        <div class="setting-note">Spare ratio turns yellow-green below this (default 75)</div>
+      </div>
+      <input type="number" id="settingYellowGreenThreshold" class="port-input" min="1" max="100" step="1">
     </div>
     <div class="setting-row">
       <div>
@@ -626,7 +637,7 @@
 <script>
   let lastData            = null;
   let _instanceId         = null;
-  let _thresholds         = { orange: 0.25, red: 0.10 };
+  let _thresholds         = { red: 0.10, orange: 0.25, yellow: 0.50, yellowGreen: 0.75 };
   let _reconnectPollTimer = null;
   let _cardDataMap        = {};
   let _openCardKey        = null;
@@ -647,12 +658,12 @@
     return 'var(--green)';
   }
 
-  // elapsed: elapsedFraction [0.01,1] from the card computation
-  function projColor(proj, elapsed) {
-    const headroom        = 100 - proj;
-    const remainingPeriod = (1 - elapsed) * 100;
-    if (headroom <= _thresholds.red    * remainingPeriod) return 'var(--red)';
-    if (headroom <= _thresholds.orange * remainingPeriod) return 'var(--orange)';
+  // ratio: spare ratio as a real % value (uncapped); thresholds stored as fractions
+  function ratioColor(ratio) {
+    if (ratio <= _thresholds.red         * 100) return 'var(--red)';
+    if (ratio <= _thresholds.orange      * 100) return 'var(--orange)';
+    if (ratio <= _thresholds.yellow      * 100) return 'var(--yellow)';
+    if (ratio <= _thresholds.yellowGreen * 100) return 'var(--yellow-green)';
     return 'var(--green)';
   }
 
@@ -721,19 +732,16 @@
       const elapsed  = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
       const proj     = pct / elapsed;
       const projBarW = Math.min(proj, 100).toFixed(1);
-      const pc       = projColor(proj, elapsed);
-      const projMsg  = proj > 100
-        ? 'Projected: ' + Math.round(proj) + '% -- over limit'
-        : 'Projected: ' + Math.round(proj) + '% by reset';
+      const pc       = color(proj); // bars use usage-% colour; threshold ladder lives on the spare ratio
 
-      // Spare ratio: headroom / remainingPeriod -- the value the thresholds test against
+      // Spare ratio: (headroom / remaining period) * 100; colour uses uncapped raw value
       const remPeriod  = (1 - elapsed) * 100;
       const headroom   = 100 - proj;
-      const spareRatio = remPeriod > 0.5
-        ? Math.round((headroom / remPeriod) * 100) : 0;
-      const ratioEmoji = spareRatio > 0 ? ' ✅' : ' ❌';
-      const ratioStyle = spareRatio <= 0 ? ' style="color:var(--red)"' : '';
-      const ratioLabel = 'Remaining period spare ratio ' + spareRatio + '%' + ratioEmoji;
+      const rawRatio   = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
+      const dispRatio  = Math.min(100, Math.round(rawRatio));
+      const rc         = ratioColor(rawRatio);
+      const ratioInRed = rawRatio <= _thresholds.red * 100 || rawRatio <= 0;
+      const ratioEmoji = ratioInRed ? '❌' : '✅';
 
       return (
         '<div class="card"' + clickAttr + '>'
@@ -749,23 +757,23 @@
         + '</div>'
         // Both bars in a wrapper so the elapsed-line can span them both
         + '<div class="bars-wrapper" style="--elapsed:' + elapsed.toFixed(4) + '">'
-        // Actual bar (ghosted) + right label
+        // Actual bar (ghosted): fill = actual %, right label = actual %
         + '<div class="bar-row"><div class="track">'
         + '<div class="fill" style="width:' + barW + '%;background:' + c + ';opacity:0.55"></div>'
         + '</div><span class="bar-side-label" style="color:' + c + '">' + fmtPct(pct) + '</span></div>'
-        // Projection bar (solid): container holds bar + centred ratio label, then right %
-        + '<div class="bar-row"><div class="proj-bar-container">'
-        + '<div class="proj-track">'
+        // Projected bar (solid): fill = projected %, right label = projected %
+        + '<div class="bar-row"><div class="proj-track">'
         + '<div class="fill" style="width:' + projBarW + '%;background:' + pc + '"></div>'
-        + '</div>'
-        + '<span class="proj-ratio-label"' + ratioStyle + '>' + ratioLabel + '</span>'
         + '</div><span class="bar-side-label" style="color:' + pc + '">' + fmtPct(proj) + '</span></div>'
         // Vertical elapsed-time marker across both bars
         + '<div class="elapsed-line"></div>'
         + '</div>'
-        // Full-mode footer: proj sentence LEFT, reset countdown RIGHT
+        // Spare ratio: coloured standalone number with 4-tier threshold colour
+        + '<div class="spare-ratio-line">Remaining period predicted spare ratio: '
+        + '<span class="spare-ratio-value" style="color:' + rc + '">' + dispRatio + '% ' + ratioEmoji + '</span>'
+        + '</div>'
+        // Full-mode footer: reset countdown
         + '<div class="card-footer full-only">'
-        + '<span class="proj-text" style="color:' + pc + '">' + projMsg + '</span>'
         + '<span class="reset">Resets in <b>' + rel + '</b></span>'
         + '</div>'
         + '</div>');
@@ -850,14 +858,15 @@
     document.getElementById('explainProj').textContent =
       "Where you're estimated to end up by reset, if your current average rate of use continues "
       + 'for the rest of this window. Computed by dividing actual usage by the fraction of the window '
-      + 'elapsed -- e.g. 30% used in 40% of the time projects to 75% by reset. A quiet spell pulls it '
-      + 'down; a burst of activity pushes it up fast. Solid fill (not ghosted) makes it the primary '
-      + 'signal. Its colour escalates as the projection tracks toward the thresholds.';
+      + 'elapsed -- e.g. 30% used in 40% of the time projects to 75% by reset. A quiet spell pulls '
+      + 'it down; a burst of activity pushes it up fast. Bar fill and right-hand label both show '
+      + 'projected usage %, directly comparable to the actual bar above it.';
     document.getElementById('explainRatio').textContent =
       'Headroom (100% minus projected) expressed as a share of the time still left in the window. '
-      + 'Answers: "of the time remaining, how much spare capacity is there?" Falls toward orange then '
-      + 'red as usage climbs and time shrinks. Thresholds are set in Settings (defaults: orange <=25%, '
-      + 'red <=10%). Tick (✅) = positive spare; red cross (❌) = projected over the limit.';
+      + 'Answers: "of the time remaining, how much spare capacity is there?" Coloured by a four-tier '
+      + 'ladder: green (above 75%), yellow-green (<=75%), yellow (<=50%), orange (<=25%), red (<=10%). '
+      + 'Thresholds are adjustable in Settings. '
+      + 'Tick (✅) = not in the red danger zone; red cross (❌) = red-zone or projected over limit.';
     document.getElementById('explainLine').textContent =
       'The faint vertical line marks how far through the current window you are right now. '
       + 'Compare it to where the Actual and Projected bars end to see whether usage is tracking '
@@ -990,12 +999,18 @@
       document.getElementById('settingAutostart').checked   = s.startWithWindows;
       document.getElementById('settingCloseToTray').checked = s.closeToTray;
       document.getElementById('settingPort').value          = s.serverPort;
-      const ot = typeof s.orangeThreshold === 'number' ? s.orangeThreshold : 0.25;
-      const rt = typeof s.redThreshold    === 'number' ? s.redThreshold    : 0.10;
-      document.getElementById('settingOrangeThreshold').value = Math.round(ot * 100);
-      document.getElementById('settingRedThreshold').value    = Math.round(rt * 100);
-      _thresholds.orange = ot;
-      _thresholds.red    = rt;
+      const rt = typeof s.redThreshold         === 'number' ? s.redThreshold         : 0.10;
+      const ot = typeof s.orangeThreshold      === 'number' ? s.orangeThreshold      : 0.25;
+      const yt = typeof s.yellowThreshold      === 'number' ? s.yellowThreshold      : 0.50;
+      const gt = typeof s.yellowGreenThreshold === 'number' ? s.yellowGreenThreshold : 0.75;
+      document.getElementById('settingRedThreshold').value         = Math.round(rt * 100);
+      document.getElementById('settingOrangeThreshold').value      = Math.round(ot * 100);
+      document.getElementById('settingYellowThreshold').value      = Math.round(yt * 100);
+      document.getElementById('settingYellowGreenThreshold').value = Math.round(gt * 100);
+      _thresholds.red         = rt;
+      _thresholds.orange      = ot;
+      _thresholds.yellow      = yt;
+      _thresholds.yellowGreen = gt;
 
       // Firewall status
       const statusEl = document.getElementById('firewallStatus');
@@ -1029,17 +1044,26 @@
     btn.disabled = true;
     msg.textContent = '';
     try {
-      let orangePct = parseFloat(document.getElementById('settingOrangeThreshold').value);
-      let redPct    = parseFloat(document.getElementById('settingRedThreshold').value);
-      if (!isFinite(orangePct) || orangePct < 1  || orangePct > 100) orangePct = 25;
-      if (!isFinite(redPct)    || redPct    < 0  || redPct    > 99)  redPct    = 10;
-      if (redPct >= orangePct) redPct = Math.max(0, orangePct - 1);
+      let rPct = parseFloat(document.getElementById('settingRedThreshold').value);
+      let oPct = parseFloat(document.getElementById('settingOrangeThreshold').value);
+      let yPct = parseFloat(document.getElementById('settingYellowThreshold').value);
+      let gPct = parseFloat(document.getElementById('settingYellowGreenThreshold').value);
+      if (!isFinite(rPct) || rPct < 0  || rPct > 99)  rPct = 10;
+      if (!isFinite(oPct) || oPct < 1  || oPct > 100) oPct = 25;
+      if (!isFinite(yPct) || yPct < 1  || yPct > 100) yPct = 50;
+      if (!isFinite(gPct) || gPct < 1  || gPct > 100) gPct = 75;
+      // Enforce ordering: red < orange < yellow < yellowGreen
+      if (rPct >= oPct) rPct = Math.max(0, oPct - 1);
+      if (oPct >= yPct) oPct = Math.max(rPct + 1, yPct - 1);
+      if (yPct >= gPct) yPct = Math.max(oPct + 1, gPct - 1);
       const body = {
-        startWithWindows: document.getElementById('settingAutostart').checked,
-        closeToTray:      document.getElementById('settingCloseToTray').checked,
-        serverPort:       parseInt(document.getElementById('settingPort').value, 10),
-        orangeThreshold:  orangePct / 100,
-        redThreshold:     redPct    / 100,
+        startWithWindows:     document.getElementById('settingAutostart').checked,
+        closeToTray:          document.getElementById('settingCloseToTray').checked,
+        serverPort:           parseInt(document.getElementById('settingPort').value, 10),
+        redThreshold:         rPct / 100,
+        orangeThreshold:      oPct / 100,
+        yellowThreshold:      yPct / 100,
+        yellowGreenThreshold: gPct / 100,
       };
       const r = await fetch('/api/settings', {
         method: 'POST',
@@ -1047,8 +1071,10 @@
         body: JSON.stringify(body),
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      _thresholds.orange = body.orangeThreshold;
-      _thresholds.red    = body.redThreshold;
+      _thresholds.red         = body.redThreshold;
+      _thresholds.orange      = body.orangeThreshold;
+      _thresholds.yellow      = body.yellowThreshold;
+      _thresholds.yellowGreen = body.yellowGreenThreshold;
       if (lastData) render(lastData);
       msg.style.color = 'var(--green)';
       msg.textContent = 'Saved.';
