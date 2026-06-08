@@ -193,10 +193,11 @@
       transition: width 0.5s ease;
     }
 
-    /* Right-side label: fixed width so all bars end at the same x */
+    /* Right-side label: fixed width so all bars end at the same x.
+       66px handles up to 6-char projected labels like "150.5%" at 16px bold. */
     .bar-side-label {
       flex-shrink: 0;
-      min-width: 52px;
+      width: 66px;
       font-size: 16px;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
@@ -210,11 +211,11 @@
 
     /* Vertical line at the elapsed-fraction position across both bars.
        left = elapsed * track_width = elapsed * (100% - label_col)
-       label_col = min-width(52px) + gap(8px) = 60px */
+       label_col = width(66px) + gap(8px) = 74px */
     .elapsed-line {
       position: absolute;
       top: 0; bottom: 0;
-      left: calc(var(--elapsed, 0) * (100% - 60px));
+      left: calc(var(--elapsed, 0) * (100% - 74px));
       width: 2px;
       background: rgba(255, 255, 255, 0.38);
       border-radius: 1px;
