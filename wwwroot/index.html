@@ -157,7 +157,7 @@
       font-size: 0.78rem;
       font-weight: 600;
       font-variant-numeric: tabular-nums;
-      color: var(--dim);
+      color: var(--text);
     }
 
     /* Bar row: flex container -- [ bar fills flex:1 ] [ label fixed right ] */
@@ -247,6 +247,15 @@
     .spare-ratio-value {
       font-weight: 700;
       font-variant-numeric: tabular-nums;
+    }
+
+    /* Rounding-ambiguity warning: shown on weekly card only, late in period near the cap */
+    .rounding-warning {
+      font-size: 0.65rem;
+      color: var(--yellow);
+      margin-top: 3px;
+      line-height: 1.35;
+      opacity: 0.9;
     }
 
     .reset {
@@ -723,14 +732,25 @@
         ? '<div class="overflow-mark" style="left:' + p100pos + '%"></div>'
         : '';
 
-      // Spare ratio: (headroom / remaining period) * 100; colour uses uncapped raw value
+      // Spare ratio: (headroom / remaining period) * 100; uncapped
       const remPeriod  = (1 - elapsed) * 100;
       const headroom   = 100 - proj;
       const rawRatio   = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
-      const dispRatio  = Math.round(rawRatio);
-      const rc         = ratioColor(rawRatio);
-      const ratioInRed = rawRatio <= _thresholds.red * 100 || rawRatio <= 0;
+
+      // proj < 0.5 means effectively zero usage: formula gives ~101% which is misleading.
+      // Show infinity symbol -- runway is conceptually unbounded when nothing has been used.
+      const projIsZero = proj < 0.5;
+      const ratioInRed = !projIsZero && (rawRatio <= _thresholds.red * 100 || rawRatio <= 0);
       const ratioEmoji = ratioInRed ? '❌' : '✅';
+      const rc         = projIsZero ? 'var(--green)' : ratioColor(rawRatio);
+      const ratioFmt   = projIsZero ? '∞ until usage not 0%'
+                       : rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
+                       : Math.round(rawRatio) + '%';
+
+      // Rounding warning: Week card only, late in period AND close to cap
+      const weekRoundingWarn = (compactLabel === 'Week' && elapsed >= 0.80 && proj >= 90)
+        ? '<div class="rounding-warning">Usage % is rounded to whole numbers -- actual usage could be slightly higher than shown. Near the weekly cap, treat the remaining headroom as approximate.</div>'
+        : '';
 
       return (
         '<div class="card"' + clickAttr + '>'
@@ -756,8 +776,9 @@
         + '</div>'
         // Spare ratio: coloured standalone number with 4-tier threshold colour
         + '<div class="spare-ratio-line">Remaining period predicted spare ratio: '
-        + '<span class="spare-ratio-value" style="color:' + rc + '">' + dispRatio + '% ' + ratioEmoji + '</span>'
+        + '<span class="spare-ratio-value" style="color:' + rc + '">' + ratioFmt + ' ' + ratioEmoji + '</span>'
         + '</div>'
+        + weekRoundingWarn
         + '</div>');
     }
 
@@ -850,7 +871,7 @@
   // bar 2 to the left edge of bar 3; right line from the right edge of both.
   // Bar 3 fill (from left) = dispRatio% in the threshold colour -- directly
   // encodes the spare ratio: a full bar means lots of spare, empty = none.
-  function buildSpareRatioSvg(elapsed, dispRatio, rc) {
+  function buildSpareRatioSvg(elapsed, dispRatio, rc, svgLabel) {
     const bx = 6, BW = 388, y2 = 6, BH = 14, y3 = 50;
     const ex  = bx + BW * elapsed;
     const spW = BW * Math.max(0, Math.min(1, dispRatio / 100));
@@ -880,7 +901,7 @@
       + '<text x="' + bx + '" y="' + (y3 + BH + 12) + '" text-anchor="start" fill="' + dim + '" font-size="8" font-family="system-ui,sans-serif">Now</text>'
       + '<text x="' + (bx + BW) + '" y="' + (y3 + BH + 12) + '" text-anchor="end" fill="' + dim + '" font-size="8" font-family="system-ui,sans-serif">Period end</text>'
       // Bar 3 centred spare% label
-      + '<text x="' + f(bx + BW / 2) + '" y="' + (y3 + BH + 12) + '" text-anchor="middle" fill="' + rc + '" font-size="9" font-family="system-ui,sans-serif" font-weight="700">' + dispRatio + '% spare</text>'
+      + '<text x="' + f(bx + BW / 2) + '" y="' + (y3 + BH + 12) + '" text-anchor="middle" fill="' + rc + '" font-size="9" font-family="system-ui,sans-serif" font-weight="700">' + (svgLabel || (dispRatio + '% spare')) + '</text>'
       + '</svg>';
   }
 
@@ -901,15 +922,20 @@
     const remPeriod = (1 - elapsed) * 100;
     const headroom  = 100 - proj;
     const rawRatio  = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
-    const dispRatio = Math.round(rawRatio);
-    const rc        = ratioColor(rawRatio);
-    document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(elapsed, dispRatio, rc);
+    const projIsZero = proj < 0.5;
+    const rc         = projIsZero ? 'var(--green)' : ratioColor(rawRatio);
+    const svgFill    = projIsZero ? 100 : Math.min(100, Math.round(rawRatio));
+    const ratioFmt   = projIsZero ? '∞ until usage not 0%'
+                     : rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
+                     : Math.round(rawRatio) + '%';
+    document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(
+      elapsed, svgFill, rc, projIsZero ? '∞ spare' : null);
     document.getElementById('explainSvg').textContent =
       'Bar 2 (top) is a schematic of the projected bar across the full window -- '
       + 'left = period start, right = period end, the marker is now. '
       + 'Bar 3 (bottom) zooms into only the remaining slice (from now to period end), '
       + 'stretched to full width. The coloured fill shows how much of that remaining '
-      + 'time is predicted to stay spare: ' + dispRatio + '% (shown above as the spare ratio). '
+      + 'time is predicted to stay spare: ' + ratioFmt + ' (shown above as the spare ratio). '
       + 'Full bar = all remaining capacity is spare; empty bar = none.';
     document.getElementById('explainActual').textContent =
       'Your actual usage so far in this ' + win + ' window, as a % of the rate limit. '
