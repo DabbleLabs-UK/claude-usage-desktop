@@ -226,7 +226,7 @@
       position: absolute;
       top: 0; bottom: 0;
       width: 2px;
-      background: rgba(255, 255, 255, 0.55);
+      background: rgba(239, 68, 68, 0.80);
       border-radius: 1px;
       pointer-events: none;
     }
@@ -644,6 +644,7 @@
       <span class="stale" id="staleEl">Stale</span>
     </div>
   </div>
+  <button class="gear-btn" onclick="openAbout()" title="About">&#9432;</button>
   <button class="gear-btn" onclick="openSettings()" title="Settings">&#9881;</button>
 </div>
 
@@ -1128,6 +1129,16 @@
       else if (!document.getElementById('settingsView').classList.contains('hidden')) closeSettings();
     }
   });
+
+  // ---- About ----
+  // The About body is the shared DabbleLabs WPF control, hosted by the C# shell. We can't render it
+  // in the page, so the button asks the host (via a WebView2 message) to pop the AboutWindow.
+
+  window.openAbout = function() {
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage('about');
+    }
+  };
 
   // ---- Settings ----
 
