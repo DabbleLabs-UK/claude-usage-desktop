@@ -280,6 +280,12 @@ public partial class App : Application
         app.MapGet("/api/instance", () =>
             Results.Ok(new { instanceId = InstanceId }));
 
+        app.MapGet("/api/version", () =>
+        {
+            var v = typeof(App).Assembly.GetName().Version;
+            return Results.Ok(new { version = v is null ? "0.0.0" : $"{v.Major}.{v.Minor}.{v.Build}" });
+        });
+
         app.MapPost("/api/firewall/enable", async (SettingsService settingsSvc, FirewallService firewallSvc) =>
         {
             var port = settingsSvc.Current.ServerPort;

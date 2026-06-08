@@ -249,6 +249,23 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Slim update-available notice at the very top -- hidden until a newer release is detected */
+    .update-banner {
+      flex-shrink: 0;
+      background: #16162a;
+      border-bottom: 1px solid var(--border);
+      padding: 5px 16px;
+      font-size: 0.70rem;
+      color: var(--dim);
+      text-align: center;
+    }
+    .update-banner a {
+      color: var(--accent);
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .update-banner a:hover { text-decoration: underline; }
+
     /* Rounding-ambiguity warning: shown on weekly card only, late in period near the cap */
     .rounding-warning {
       font-size: 0.65rem;
@@ -507,6 +524,10 @@
   </style>
 </head>
 <body>
+
+<div id="updateBanner" class="update-banner hidden">
+  Update available: <a id="updateLink" href="#" target="_blank" rel="noopener noreferrer"></a> -- click to download
+</div>
 
 <main id="mainView">
   <div class="loading">Loading...</div>
@@ -1063,6 +1084,38 @@
     if (id) { _instanceId = id; console.log('[CU] Instance id stored on load:', id); }
     else { console.warn('[CU] Failed to fetch initial instance id'); }
   });
+
+  // ---- Update-available check ----
+
+  function _semverGt(a, b) {
+    const p = v => (v + '').split('.').map(n => parseInt(n, 10) || 0);
+    const [aM, am, ap] = p(a), [bM, bm, bp] = p(b);
+    return aM !== bM ? aM > bM : am !== bm ? am > bm : ap > bp;
+  }
+
+  async function checkForUpdate() {
+    try {
+      const ac  = new AbortController();
+      const tid = setTimeout(() => ac.abort(), 8000);
+      const [vRes, gRes] = await Promise.all([
+        fetch('/api/version', { signal: ac.signal }),
+        fetch('https://api.github.com/repos/DabbleLabs-UK/claude-usage-desktop/releases/latest',
+          { signal: ac.signal })
+      ]);
+      clearTimeout(tid);
+      if (!vRes.ok || !gRes.ok) return;
+      const { version: cur }    = await vRes.json();
+      const { tag_name, html_url } = await gRes.json();
+      const latest = (tag_name || '').replace(/^v/, '');
+      if (!latest || !_semverGt(latest, cur)) return;
+      const link = document.getElementById('updateLink');
+      link.textContent = 'v' + latest;
+      link.href = html_url;
+      document.getElementById('updateBanner').classList.remove('hidden');
+    } catch { /* fail silently -- offline, GitHub outage, etc. */ }
+  }
+
+  checkForUpdate();
 
   // ---- In-app navigation history (intercepts OS/hardware back) ----
 
