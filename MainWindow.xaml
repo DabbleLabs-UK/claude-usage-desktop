@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="Claude Usage"
+        Icon="design/logo_icon.png"
         Width="420" Height="720"
         MinWidth="200" MinHeight="100"
         WindowStartupLocation="CenterScreen"
