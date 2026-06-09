@@ -9,4 +9,5 @@ public record AppSettings(
     double OrangeThreshold = 0.25,
     double RedThreshold = 0.10,
     double YellowThreshold = 0.50,
-    double YellowGreenThreshold = 0.75);
+    double YellowGreenThreshold = 0.75,
+    string? PreferredAdapterName = null);

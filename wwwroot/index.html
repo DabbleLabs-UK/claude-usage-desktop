@@ -10,9 +10,9 @@
     :root {
       --bg:      #0d0d1a;
       --surface: #151526;
-      --card:    #2e2e60;
+      --card:    #383870;
       --border:  #252540;
-      --track:   #111128;
+      --track:   #000000;
       --text:    #dde1f0;
       --muted:   #60688a;
       --dim:     #8890b0;
@@ -242,7 +242,7 @@
     /* Spare ratio: standalone coloured number shown below the bars */
     .spare-ratio-line {
       font-size: 0.7rem;
-      color: var(--dim);
+      color: #ffffff;
       margin: 2px 0 3px;
       line-height: 1.3;
     }
@@ -475,6 +475,24 @@
     .firewall-btn:hover { opacity: 0.88; }
     .firewall-btn:disabled { opacity: 0.45; cursor: default; }
 
+    .adapter-hint {
+      font-size: 0.68rem;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.35;
+    }
+
+    .adapter-picker {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.75rem;
+      padding: 5px 8px;
+    }
+    .adapter-picker:focus { outline: none; border-color: var(--accent); }
+
     /* Detail / explanation view */
     .detail-view {
       flex: 1;
@@ -546,6 +564,10 @@
     <div class="lan-panel-label">Phone access</div>
     <div class="lan-url" id="lanUrl"></div>
     <div id="lanQr"></div>
+    <div id="adapterHint" class="adapter-hint hidden"></div>
+    <select id="adapterPicker" class="adapter-picker hidden" onchange="onAdapterPick(this.value)">
+      <option value="">Auto (best guess)</option>
+    </select>
   </div>
 
   <div class="setting-card">
@@ -653,12 +675,14 @@
 <script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
-  let lastData            = null;
-  let _instanceId         = null;
-  let _thresholds         = { red: 0.10, orange: 0.25, yellow: 0.50, yellowGreen: 0.75 };
-  let _reconnectPollTimer = null;
-  let _cardDataMap        = {};
-  let _openCardKey        = null;
+  let lastData                = null;
+  let _instanceId             = null;
+  let _thresholds             = { red: 0.10, orange: 0.25, yellow: 0.50, yellowGreen: 0.75 };
+  let _reconnectPollTimer     = null;
+  let _cardDataMap            = {};
+  let _openCardKey            = null;
+  let _loadedPreferredAdapter = null;
+  let _adapterCandidates      = [];
 
   async function fetchInstanceId() {
     try {
@@ -734,7 +758,9 @@
     const c    = color(pct);
     const barW = Math.min(pct, 100).toFixed(1);
 
-    if (windowMs) {
+    // Projection needs both a known window length and a reset time. resets_at is
+    // nullable in the API, so fall through to the single-bar card when it's absent.
+    if (windowMs && w.resetsAt) {
       const resetsAt = new Date(w.resetsAt).getTime();
       const expired  = Date.now() >= resetsAt;
       const elapsed  = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
@@ -771,9 +797,9 @@
       // proj < 0.5 means effectively zero usage: formula gives ~101% which is misleading.
       // Show infinity symbol -- runway is conceptually unbounded when nothing has been used.
       const projIsZero = proj < 0.5;
-      const ratioInRed = !projIsZero && (rawRatio <= _thresholds.red * 100 || rawRatio <= 0);
-      const ratioEmoji = ratioInRed ? '❌' : '✅';
-      const rc         = projIsZero ? 'var(--green)' : ratioColor(rawRatio);
+      const isOver     = !projIsZero && proj >= 100;
+      const ratioEmoji = isOver ? '❌' : '✅';
+      const rc         = isOver ? 'var(--red)' : 'var(--green)';
       const ratioFmt   = projIsZero ? '∞ until usage not 0%'
                        : rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
                        : Math.round(rawRatio) + '%';
@@ -818,11 +844,14 @@
     }
 
     // Fallback: single-bar card (no projection window available)
+    const countdown = w.resetsAt
+      ? '<span class="countdown" data-resets-at="' + w.resetsAt + '">' + timeUntilSec(w.resetsAt) + '</span>'
+      : '';
     return (
       '<div class="card"' + clickAttr + '>'
       + '<div class="card-head">'
       + '<span class="label">' + label + '</span>'
-      + '<span class="countdown" data-resets-at="' + w.resetsAt + '">' + timeUntilSec(w.resetsAt) + '</span>'
+      + countdown
       + '</div>'
       + '<div class="bar-row"><div class="track">'
       + '<div class="fill" style="width:' + barW + '%;background:' + c + '"></div>'
@@ -853,27 +882,106 @@
 
   const W7 = 7 * 24 * 3600 * 1000;
 
+  // ---- Generic usage-window model ----
+  // Windows arrive from the backend keyed by their ORIGINAL API field name
+  // (five_hour, seven_day, seven_day_opus, ...). Everything below derives display
+  // names, window durations and card order from those keys, so windows Anthropic
+  // adds in future render automatically with no code change here.
+
+  // Exact display names for the windows we already shipped -- keeps the UI identical.
+  const WINDOW_ALIAS = {
+    five_hour:        { label: '5-hour',         compact: 'Session' },
+    seven_day:        { label: '7-day',          compact: 'Week' },
+    seven_day_opus:   { label: 'Opus (7-day)',   compact: 'Opus' },
+    seven_day_sonnet: { label: 'Sonnet (7-day)', compact: 'Sonnet' },
+  };
+
+  // Always-rendered cards, in order. Shown greyed ("Not tracked this period") when
+  // null/absent. New non-null windows render after these; the billing card is last.
+  const WINDOW_ORDER = ['five_hour', 'seven_day', 'seven_day_sonnet', 'seven_day_opus'];
+
+  function _cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+  // Display names from a key. seven_day_<model> -> "<Model> (7-day)"; any other key
+  // is prettified (underscores -> spaces, Title Case). Aliases win so shipped names
+  // stay exact (Session, Week, Sonnet, Opus).
+  function windowNames(key) {
+    if (WINDOW_ALIAS[key]) return WINDOW_ALIAS[key];
+    const m = /^seven_day_(.+)$/.exec(key);
+    if (m) {
+      const model = m[1].split('_').map(_cap).join(' ');
+      return { label: model + ' (7-day)', compact: model };
+    }
+    const pretty = key.split('_').map(_cap).join(' ');
+    return { label: pretty, compact: pretty };
+  }
+
+  const _NUM_WORDS = { one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8,
+    nine:9, ten:10, eleven:11, twelve:12, fifteen:15, twenty:20, thirty:30, sixty:60 };
+  const _UNIT_MS = { minute:60000, hour:3600000, day:86400000, week:604800000 };
+
+  // Window length in ms, parsed from the key: a number (word or digit) immediately
+  // followed by a unit. five_hour -> 5h, seven_day[_x] -> 7d, thirty_day -> 30d.
+  // Returns null when no duration is encoded -> the card falls back to a single bar.
+  function deriveWindowMs(key) {
+    const parts = key.toLowerCase().split('_');
+    for (let i = 0; i < parts.length - 1; i++) {
+      const n = _NUM_WORDS[parts[i]] != null ? _NUM_WORDS[parts[i]]
+              : (/^\d+$/.test(parts[i]) ? parseInt(parts[i], 10) : null);
+      if (n == null) continue;
+      const unit = parts[i + 1].replace(/s$/, '');
+      if (_UNIT_MS[unit]) return n * _UNIT_MS[unit];
+    }
+    return null;
+  }
+
+  // Human window length for explain text, derived from the duration.
+  function humanWindow(ms) {
+    if (!ms) return 'rolling';
+    const h = ms / 3600000;
+    return h < 24 ? h + '-hour' : (h / 24) + '-day';
+  }
+
   function render(data) {
     lastData = data;
-    _cardDataMap = {
-      '5-hour':         { label: '5-hour',         w: data.fiveHour,       windowMs: 5 * 3600 * 1000 },
-      '7-day':          { label: '7-day',           w: data.sevenDay,       windowMs: W7 },
-      'Sonnet (7-day)': { label: 'Sonnet (7-day)',  w: data.sevenDaySonnet, windowMs: W7 },
-      'Opus (7-day)':   { label: 'Opus (7-day)',    w: data.sevenDayOpus,   windowMs: W7 },
-    };
-    document.getElementById('mainView').innerHTML =
-      card('5-hour',         data.fiveHour,      5 * 3600 * 1000, 'Session') +
-      card('7-day',          data.sevenDay,       W7,              'Week') +
-      card('Sonnet (7-day)', data.sevenDaySonnet, W7,              'Sonnet') +
-      card('Opus (7-day)',   data.sevenDayOpus,   W7,              'Opus') +
-      billingCard(data.extraUsage);
+    const windows = (data && data.windows) || {};
+    _cardDataMap = {};
+    let html = '';
+
+    // 1. Fixed known cards, always rendered (greyed when null/absent).
+    const rendered = new Set();
+    for (const key of WINDOW_ORDER) {
+      rendered.add(key);
+      const w = windows[key] || null;
+      const { label, compact } = windowNames(key);
+      const windowMs = deriveWindowMs(key);
+      _cardDataMap[label] = { label, w, windowMs };
+      html += card(label, w, windowMs, compact);
+    }
+
+    // 2. Any other window that is currently non-null (new models/windows). Unknown
+    //    null windows (tangelo, cinder_cove, ...) render nothing -- no clutter.
+    for (const key of Object.keys(windows)) {
+      if (rendered.has(key)) continue;
+      const w = windows[key];
+      if (!w) continue;
+      const { label, compact } = windowNames(key);
+      const windowMs = deriveWindowMs(key);
+      _cardDataMap[label] = { label, w, windowMs };
+      html += card(label, w, windowMs, compact);
+    }
+
+    // 3. Billing card last (below the fold).
+    html += billingCard(data.extraUsage);
+    document.getElementById('mainView').innerHTML = html;
+
     document.getElementById('updatedEl').textContent =
       'updated ' + new Date(data.fetchedAt).toLocaleTimeString();
     document.getElementById('staleEl').classList.toggle('show', !!data.isStale);
     // Refresh the detail card preview if the detail view is currently open
     if (_openCardKey) {
       const d = _cardDataMap[_openCardKey];
-      if (d && d.w) {
+      if (d && d.w && d.windowMs && d.w.resetsAt) {
         document.getElementById('detailCard').innerHTML = card(d.label, d.w, d.windowMs, null, false);
         const rs = new Date(d.w.resetsAt).getTime();
         const el = Math.max(0.01, Math.min(1, (Date.now() - (rs - d.windowMs)) / d.windowMs));
@@ -916,7 +1024,7 @@
     const bx = 6, BW = 388, y2 = 6, BH = 14, y3 = 50;
     const ex  = bx + BW * elapsed;
     const spW = BW * Math.max(0, Math.min(1, dispRatio / 100));
-    const bg  = '#111128';
+    const bg  = '#000000';
     const dim = '#60688a';
     const f   = n => n.toFixed(1);
     return '<svg viewBox="0 0 400 90" xmlns="http://www.w3.org/2000/svg" width="100%" style="display:block;margin:4px 0">'
@@ -952,38 +1060,50 @@
     history.pushState({ view: 'detail', cardKey: cardKey }, '');
     _openCardKey = cardKey;
     const { label, w, windowMs } = d;
-    const win = windowMs === 5 * 3600 * 1000 ? '5-hour' : '7-day';
+    const win = humanWindow(windowMs);
     document.getElementById('detailTitle').textContent = label;
     document.getElementById('detailCard').innerHTML = card(label, w, windowMs, null, false);
 
-    // Compute spare-ratio values for the SVG (same formulas as card())
-    const resetsAt  = new Date(w.resetsAt).getTime();
-    const elapsed   = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
-    const proj      = w.utilization / elapsed;
-    const remPeriod = (1 - elapsed) * 100;
-    const headroom  = 100 - proj;
-    const rawRatio  = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
-    const projIsZero = proj < 0.5;
-    const rc         = projIsZero ? 'var(--green)' : ratioColor(rawRatio);
-    const svgFill    = projIsZero ? 100 : Math.min(100, Math.round(rawRatio));
-    const ratioFmt   = projIsZero ? '∞ until usage not 0%'
-                     : rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
-                     : Math.round(rawRatio) + '%';
-    document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(
-      elapsed, svgFill, rc, projIsZero ? '∞ spare' : null);
-    document.getElementById('explainSvg').textContent =
-      'Top: predicted usage across the full window, now-marker shown. '
-      + 'Bottom: the remaining slice (now → period end) stretched full width — '
-      + 'coloured fill = ' + ratioFmt + ' spare. Full bar = all remaining time is spare; empty = none.';
-    document.getElementById('explainActual').textContent =
-      'Usage so far in this ' + win + ' window, as a % of the rate limit. Resets in ' + timeUntilSec(w.resetsAt) + '.';
-    document.getElementById('explainProj').textContent =
-      'Actual usage divided by the fraction of the window elapsed — '
-      + 'e.g. 30% used in 40% of the time projects to 75% by reset. '
-      + 'A quiet spell pulls it down; a burst pushes it up.';
-    document.getElementById('explainRatio').textContent =
-      'Headroom (100% minus predicted) as a share of time still left. '
-      + 'Tick (✅) = within limits; cross (❌) = red-zone or predicted over limit.';
+    // Projection (and the zoomed spare-ratio SVG) need both a window length and a
+    // reset time. When either is missing the window has no projection -- hide the
+    // SVG block and show the non-projection explanations only.
+    const hasProj = !!(windowMs && w.resetsAt);
+    document.getElementById('spareRatioSvgBlock').classList.toggle('hidden', !hasProj);
+    document.getElementById('explainProj').parentElement.classList.toggle('hidden', !hasProj);
+    document.getElementById('explainRatio').parentElement.classList.toggle('hidden', !hasProj);
+    document.getElementById('explainLine').parentElement.classList.toggle('hidden', !hasProj);
+
+    if (hasProj) {
+      // Compute spare-ratio values for the SVG (same formulas as card())
+      const resetsAt  = new Date(w.resetsAt).getTime();
+      const elapsed   = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
+      const proj      = w.utilization / elapsed;
+      const remPeriod = (1 - elapsed) * 100;
+      const headroom  = 100 - proj;
+      const rawRatio  = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
+      const projIsZero = proj < 0.5;
+      const rc         = projIsZero ? 'var(--green)' : ratioColor(rawRatio);
+      const svgFill    = projIsZero ? 100 : Math.min(100, Math.round(rawRatio));
+      const ratioFmt   = projIsZero ? '∞ until usage not 0%'
+                       : rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
+                       : Math.round(rawRatio) + '%';
+      document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(
+        elapsed, svgFill, rc, projIsZero ? '∞ spare' : null);
+      document.getElementById('explainSvg').textContent =
+        'Top: predicted usage across the full window, now-marker shown. '
+        + 'Bottom: the remaining slice (now → period end) stretched full width — '
+        + 'coloured fill = ' + ratioFmt + ' spare. Full bar = all remaining time is spare; empty = none.';
+      document.getElementById('explainProj').textContent =
+        'Actual usage divided by the fraction of the window elapsed — '
+        + 'e.g. 30% used in 40% of the time projects to 75% by reset. '
+        + 'A quiet spell pulls it down; a burst pushes it up.';
+      document.getElementById('explainRatio').textContent =
+        'Headroom (100% minus predicted) as a share of time still left. '
+        + 'Tick (✅) = within limits; cross (❌) = red-zone or predicted over limit.';
+    }
+    document.getElementById('explainActual').textContent = w.resetsAt
+      ? 'Usage so far in this ' + win + ' window, as a % of the rate limit. Resets in ' + timeUntilSec(w.resetsAt) + '.'
+      : 'Usage so far in this window, as a % of the rate limit.';
     document.getElementById('explainLine').textContent =
       'Marks how far through the window you are right now.';
     document.getElementById('mainView').classList.add('hidden');
@@ -1173,6 +1293,7 @@
       document.getElementById('settingAutostart').checked   = s.startWithWindows;
       document.getElementById('settingCloseToTray').checked = s.closeToTray;
       document.getElementById('settingPort').value          = s.serverPort;
+      _loadedPreferredAdapter = s.preferredAdapterName || null;
       const rt = typeof s.redThreshold         === 'number' ? s.redThreshold         : 0.10;
       const ot = typeof s.orangeThreshold      === 'number' ? s.orangeThreshold      : 0.25;
       const yt = typeof s.yellowThreshold      === 'number' ? s.yellowThreshold      : 0.50;
@@ -1210,6 +1331,7 @@
     }
 
     await loadNetworkInfo();
+    await loadAdapters(_loadedPreferredAdapter);
   }
 
   async function saveSettings() {
@@ -1230,6 +1352,7 @@
       if (rPct >= oPct) rPct = Math.max(0, oPct - 1);
       if (oPct >= yPct) oPct = Math.max(rPct + 1, yPct - 1);
       if (yPct >= gPct) yPct = Math.max(oPct + 1, gPct - 1);
+      const pickedAdapter = document.getElementById('adapterPicker').value || null;
       const body = {
         startWithWindows:     document.getElementById('settingAutostart').checked,
         closeToTray:          document.getElementById('settingCloseToTray').checked,
@@ -1238,6 +1361,7 @@
         orangeThreshold:      oPct / 100,
         yellowThreshold:      yPct / 100,
         yellowGreenThreshold: gPct / 100,
+        preferredAdapterName: pickedAdapter,
       };
       const r = await fetch('/api/settings', {
         method: 'POST',
@@ -1264,6 +1388,58 @@
   // ---- Phone access / LAN ----
 
   let _qrInstance = null;
+
+  async function loadAdapters(preferredName) {
+    try {
+      const r = await fetch('/api/adapters');
+      if (!r.ok) return;
+      _adapterCandidates = await r.json();
+      const sel  = document.getElementById('adapterPicker');
+      const hint = document.getElementById('adapterHint');
+      if (!sel || !hint) return;
+      if (_adapterCandidates.length <= 1) {
+        sel.classList.add('hidden');
+        hint.classList.add('hidden');
+        return;
+      }
+      sel.innerHTML = '<option value="">Auto (best guess)</option>'
+        + _adapterCandidates.map(c =>
+            '<option value="' + c.name + '"' + (c.name === preferredName ? ' selected' : '') + '>'
+            + c.label + '</option>').join('');
+      const auto = _adapterCandidates.find(c => c.isAutoSelected);
+      if (!preferredName && auto) {
+        hint.textContent = 'Auto-selected: ' + auto.ip + ' — change below if your phone can\'t connect.';
+        hint.classList.remove('hidden');
+      } else {
+        hint.classList.add('hidden');
+      }
+      sel.classList.remove('hidden');
+    } catch (e) { /* fail silently */ }
+  }
+
+  function onAdapterPick(name) {
+    const candidate = name
+      ? _adapterCandidates.find(c => c.name === name)
+      : (_adapterCandidates.find(c => c.isAutoSelected) || _adapterCandidates[0]);
+    if (!candidate) return;
+    const port = parseInt(document.getElementById('settingPort').value, 10) || 5005;
+    const url  = 'http://' + candidate.ip + ':' + port;
+    document.getElementById('lanUrl').textContent = url;
+    const qrEl = document.getElementById('lanQr');
+    qrEl.innerHTML = '';
+    _qrInstance = new QRCode(qrEl, { text: url, width: 140, height: 140,
+      colorDark: '#dde1f0', colorLight: '#1b1b30' });
+    const hint = document.getElementById('adapterHint');
+    if (!name) {
+      const auto = _adapterCandidates.find(c => c.isAutoSelected);
+      if (auto) {
+        hint.textContent = 'Auto-selected: ' + auto.ip + ' — change below if your phone can\'t connect.';
+        hint.classList.remove('hidden');
+      }
+    } else {
+      hint.classList.add('hidden');
+    }
+  }
 
   async function loadNetworkInfo() {
     try {

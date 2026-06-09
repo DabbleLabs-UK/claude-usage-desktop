@@ -203,42 +203,49 @@ public partial class App : Application
         ni.GetIPProperties().GatewayAddresses
             .Any(gw => gw.Address.AddressFamily == AddressFamily.InterNetwork);
 
-    private static string? GetLanIp()
-    {
-        var real = NetworkInterface.GetAllNetworkInterfaces()
-            .Where(ni => ni.OperationalStatus == OperationalStatus.Up
-                      && ni.NetworkInterfaceType != NetworkInterfaceType.Loopback
-                      && ni.NetworkInterfaceType != NetworkInterfaceType.Tunnel
-                      && !IsVirtualAdapter(ni))
-            .OrderByDescending(HasIpv4Gateway)
-            .ThenByDescending(ni => ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211
-                                 || ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet)
-            .ToList();
-
-        foreach (var ni in real)
-        {
-            var ip = ni.GetIPProperties().UnicastAddresses
-                .Where(ua => ua.Address.AddressFamily == AddressFamily.InterNetwork
-                          && !ua.Address.ToString().StartsWith("169.254"))
-                .Select(ua => ua.Address.ToString())
-                .FirstOrDefault(addr => addr.StartsWith("192.168.")
-                                     || addr.StartsWith("10.")
-                                     || IsPrivate172(addr));
-            if (ip != null) return ip;
-        }
-
-        // Fall back: any private non-APIPA IPv4 (ignores virtual-adapter filter)
-        return NetworkInterface.GetAllNetworkInterfaces()
-            .Where(ni => ni.OperationalStatus == OperationalStatus.Up
-                      && ni.NetworkInterfaceType != NetworkInterfaceType.Loopback
-                      && ni.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
-            .SelectMany(ni => ni.GetIPProperties().UnicastAddresses)
+    private static string? GetPrivateIp(NetworkInterface ni) =>
+        ni.GetIPProperties().UnicastAddresses
             .Where(ua => ua.Address.AddressFamily == AddressFamily.InterNetwork
                       && !ua.Address.ToString().StartsWith("169.254"))
             .Select(ua => ua.Address.ToString())
             .FirstOrDefault(addr => addr.StartsWith("192.168.")
                                  || addr.StartsWith("10.")
                                  || IsPrivate172(addr));
+
+    private static IReadOnlyList<(string Name, string Ip, bool IsVirtual)> GetAdapterCandidates()
+    {
+        return NetworkInterface.GetAllNetworkInterfaces()
+            .Where(ni => ni.OperationalStatus == OperationalStatus.Up
+                      && ni.NetworkInterfaceType != NetworkInterfaceType.Loopback
+                      && ni.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
+            .Select(ni => (ni, ip: GetPrivateIp(ni)))
+            .Where(t => t.ip is not null)
+            .OrderByDescending(t => !IsVirtualAdapter(t.ni))
+            .ThenByDescending(t => HasIpv4Gateway(t.ni))
+            .ThenByDescending(t => t.ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211
+                                || t.ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet)
+            .Select(t => (t.ni.Name, t.ip!, IsVirtual: IsVirtualAdapter(t.ni)))
+            .ToList();
+    }
+
+    private static string? GetLanIp(string? preferredAdapterName = null)
+    {
+        var candidates = GetAdapterCandidates();
+
+        // If a preferred adapter is stored, try to find it first
+        if (preferredAdapterName is not null)
+        {
+            var preferred = candidates.FirstOrDefault(c =>
+                string.Equals(c.Name, preferredAdapterName, StringComparison.OrdinalIgnoreCase));
+            if (preferred.Ip is not null) return preferred.Ip;
+        }
+
+        // Auto: prefer physical adapters first
+        var autoIp = candidates.Where(c => !c.IsVirtual).Select(c => c.Ip).FirstOrDefault();
+        if (autoIp is not null) return autoIp;
+
+        // Fall back to any candidate (virtual included)
+        return candidates.Select(c => c.Ip).FirstOrDefault();
     }
 
     private static bool IsPrivate172(string ip)
@@ -307,7 +314,23 @@ public partial class App : Application
         });
 
         app.MapGet("/api/network-info", (SettingsService settings) =>
-            Results.Ok(new { lanIp = GetLanIp(), port = settings.Current.ServerPort }));
+            Results.Ok(new { lanIp = GetLanIp(settings.Current.PreferredAdapterName), port = settings.Current.ServerPort }));
+
+        app.MapGet("/api/adapters", (SettingsService settings) =>
+        {
+            var preferred = settings.Current.PreferredAdapterName;
+            var autoIp = GetLanIp(); // auto-selected (no preference)
+            var candidates = GetAdapterCandidates();
+            var result = candidates.Select(c => new
+            {
+                name       = c.Name,
+                ip         = c.Ip,
+                label      = $"{c.Name} — {c.Ip}{(c.IsVirtual ? " [virtual/VPN]" : "")}",
+                isVirtual  = c.IsVirtual,
+                isAutoSelected = c.Ip == autoIp && preferred is null,
+            });
+            return Results.Ok(result);
+        });
 
         app.MapGet("/api/instance", () =>
             Results.Ok(new { instanceId = InstanceId }));

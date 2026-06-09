@@ -58,8 +58,10 @@ public sealed class UsagePoller : BackgroundService
             var data = await _usageService.FetchAsync();
             _state.Update(data);
             await _hub.Clients.All.SendAsync("usageUpdated", data, ct);
-            _logger.LogInformation("Usage fetched: 5h={FiveHour}% 7d={SevenDay}%",
-                data.FiveHour?.Utilization, data.SevenDay?.Utilization);
+            _logger.LogInformation("Usage fetched: 5h={FiveHour}% 7d={SevenDay}% ({Count} windows)",
+                data.Windows.GetValueOrDefault("five_hour")?.Utilization,
+                data.Windows.GetValueOrDefault("seven_day")?.Utilization,
+                data.Windows.Count);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
         {
