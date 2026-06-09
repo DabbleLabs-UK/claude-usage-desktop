@@ -74,7 +74,7 @@ public partial class MainWindow : Window
     protected override void OnClosing(CancelEventArgs e)
     {
         var app = (App)Application.Current;
-        if (!app.IsQuitting && app.SettingsService.Current.CloseToTray)
+        if (!app.IsQuitting && app.TrayIconAvailable && app.SettingsService.Current.CloseToTray)
         {
             e.Cancel = true;
             Hide();

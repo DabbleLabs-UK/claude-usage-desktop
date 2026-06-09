@@ -23,8 +23,10 @@ public partial class App : Application
     private IHost? _host;
     private WinForms.NotifyIcon? _notifyIcon;
     private MainWindow? _mainWindow;
+    private bool _trayIconAvailable;
 
     public bool IsQuitting { get; private set; }
+    public bool TrayIconAvailable => _trayIconAvailable;
     public SettingsService SettingsService { get; private set; } = null!;
     private FirewallService _firewallService = null!;
 
@@ -90,37 +92,67 @@ public partial class App : Application
 
     private void InitTrayIcon()
     {
-        var menu = new WinForms.ContextMenuStrip();
-        menu.Items.Add("Open", null, (_, _) => ShowMainWindow());
-        menu.Items.Add("Settings", null, (_, _) => ShowSettingsView());
-        menu.Items.Add(new WinForms.ToolStripSeparator());
-        menu.Items.Add("Quit", null, (_, _) => Quit());
-
-        _notifyIcon = new WinForms.NotifyIcon
+        try
         {
-            Icon = CreateTrayIcon(),
-            Visible = true,
-            Text = "Claude Usage",
-            ContextMenuStrip = menu,
-        };
-        _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
+            var menu = new WinForms.ContextMenuStrip();
+            menu.Items.Add("Open", null, (_, _) => ShowMainWindow());
+            menu.Items.Add("Settings", null, (_, _) => ShowSettingsView());
+            menu.Items.Add(new WinForms.ToolStripSeparator());
+            menu.Items.Add("Quit", null, (_, _) => Quit());
+
+            _notifyIcon = new WinForms.NotifyIcon
+            {
+                Icon = CreateTrayIcon(),
+                Visible = true,
+                Text = "Claude Usage",
+                ContextMenuStrip = menu,
+            };
+            _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
+            _trayIconAvailable = true;
+        }
+        catch
+        {
+            // If tray icon init fails, _trayIconAvailable stays false.
+            // MainWindow.OnClosing will not hide-to-tray in that case,
+            // so the user is never left with a running but unreachable app.
+            _trayIconAvailable = false;
+        }
     }
 
     private static Drawing.Icon CreateTrayIcon()
     {
-        using var bmp = new Drawing.Bitmap(16, 16, Drawing.Imaging.PixelFormat.Format32bppArgb);
-        using (var g = Drawing.Graphics.FromImage(bmp))
+        // Primary: read the Win32 PE icon resources from the running exe — the same
+        // icon that the taskbar and window title-bar show (set by <ApplicationIcon>).
+        // This works in self-contained single-file publish because ProcessPath points
+        // to the bundled exe, which carries the PE icon resources in its header.
+        try
         {
-            g.Clear(Drawing.Color.Transparent);
-            g.SmoothingMode = Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using var fill = new Drawing.SolidBrush(Drawing.Color.FromArgb(167, 139, 250));
-            g.FillEllipse(fill, 1, 1, 13, 13);
-            using var font = new Drawing.Font("Segoe UI", 7.5f, Drawing.FontStyle.Bold);
-            using var textBrush = new Drawing.SolidBrush(Drawing.Color.FromArgb(13, 13, 26));
-            g.DrawString("C", font, textBrush, 3f, 2f);
+            var exePath = Environment.ProcessPath;
+            if (exePath is not null)
+            {
+                var icon = Drawing.Icon.ExtractAssociatedIcon(exePath);
+                if (icon is not null) return icon;
+            }
         }
-        // GetHicon creates an independent HICON; handle lives for app lifetime
-        return Drawing.Icon.FromHandle(bmp.GetHicon());
+        catch { }
+
+        // Fallback: load from the embedded .NET resource — search by suffix so the
+        // exact managed resource name doesn't need to be hardcoded.
+        try
+        {
+            var asm = typeof(App).Assembly;
+            var name = Array.Find(asm.GetManifestResourceNames(),
+                n => n.EndsWith("logo_icon.ico", StringComparison.OrdinalIgnoreCase));
+            if (name is not null)
+            {
+                using var stream = asm.GetManifestResourceStream(name);
+                if (stream is not null)
+                    return new Drawing.Icon(stream);
+            }
+        }
+        catch { }
+
+        return SystemIcons.Application;
     }
 
     private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)

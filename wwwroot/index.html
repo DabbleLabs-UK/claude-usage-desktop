@@ -10,8 +10,9 @@
     :root {
       --bg:      #0d0d1a;
       --surface: #151526;
-      --card:    #252550;
+      --card:    #2e2e60;
       --border:  #252540;
+      --track:   #111128;
       --text:    #dde1f0;
       --muted:   #60688a;
       --dim:     #8890b0;
@@ -172,7 +173,7 @@
       position: relative;
       flex: 1;
       height: 16px;
-      background: var(--border);
+      background: var(--track);
       border-radius: 3px;
       overflow: hidden;
     }
@@ -182,7 +183,7 @@
       position: relative;
       flex: 1;
       height: 16px;
-      background: var(--border);
+      background: var(--track);
       border-radius: 3px;
       overflow: hidden;
     }
@@ -616,11 +617,11 @@
   </div>
   <div id="detailCard" onclick="history.back()" style="cursor:pointer"></div>
   <div class="explain-block">
-    <div class="explain-title">Actual bar (ghosted)</div>
+    <div class="explain-title">Actual usage / top bar</div>
     <div class="explain-text" id="explainActual"></div>
   </div>
   <div class="explain-block">
-    <div class="explain-title">Projected bar (solid)</div>
+    <div class="explain-title">Predicted usage / bottom bar</div>
     <div class="explain-text" id="explainProj"></div>
   </div>
   <div class="explain-block">
@@ -915,7 +916,7 @@
     const bx = 6, BW = 388, y2 = 6, BH = 14, y3 = 50;
     const ex  = bx + BW * elapsed;
     const spW = BW * Math.max(0, Math.min(1, dispRatio / 100));
-    const bg  = '#252540';
+    const bg  = '#111128';
     const dim = '#60688a';
     const f   = n => n.toFixed(1);
     return '<svg viewBox="0 0 400 90" xmlns="http://www.w3.org/2000/svg" width="100%" style="display:block;margin:4px 0">'
@@ -924,7 +925,7 @@
       // Bar 2: elapsed portion (dim)
       + '<rect x="' + bx + '" y="' + y2 + '" width="' + f(BW * elapsed) + '" height="' + BH + '" rx="3" fill="' + dim + '" opacity="0.45"/>'
       // Bar 2: remaining zone (slightly lighter to show what is being zoomed)
-      + '<rect x="' + f(ex) + '" y="' + y2 + '" width="' + f(BW * (1 - elapsed)) + '" height="' + BH + '" rx="3" fill="#2a2a52"/>'
+      + '<rect x="' + f(ex) + '" y="' + y2 + '" width="' + f(BW * (1 - elapsed)) + '" height="' + BH + '" rx="3" fill="#1e1e40"/>'
       // Bar 2: now-marker vertical line
       + '<line x1="' + f(ex) + '" y1="' + y2 + '" x2="' + f(ex) + '" y2="' + (y2 + BH) + '" stroke="rgba(255,255,255,0.5)" stroke-width="2"/>'
       // "Now" label under bar 2 marker
@@ -971,31 +972,20 @@
     document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(
       elapsed, svgFill, rc, projIsZero ? '∞ spare' : null);
     document.getElementById('explainSvg').textContent =
-      'Bar 2 (top) is a schematic of the projected bar across the full window -- '
-      + 'left = period start, right = period end, the marker is now. '
-      + 'Bar 3 (bottom) zooms into only the remaining slice (from now to period end), '
-      + 'stretched to full width. The coloured fill shows how much of that remaining '
-      + 'time is predicted to stay spare: ' + ratioFmt + ' (shown above as the spare ratio). '
-      + 'Full bar = all remaining capacity is spare; empty bar = none.';
+      'Top: predicted usage across the full window, now-marker shown. '
+      + 'Bottom: the remaining slice (now → period end) stretched full width — '
+      + 'coloured fill = ' + ratioFmt + ' spare. Full bar = all remaining time is spare; empty = none.';
     document.getElementById('explainActual').textContent =
-      'Your actual usage so far in this ' + win + ' window, as a % of the rate limit. '
-      + 'Semi-transparent so it stays visually secondary to the projection. Resets in ' + timeUntilSec(w.resetsAt) + '.';
+      'Usage so far in this ' + win + ' window, as a % of the rate limit. Resets in ' + timeUntilSec(w.resetsAt) + '.';
     document.getElementById('explainProj').textContent =
-      "Where you're estimated to end up by reset, if your current average rate of use continues "
-      + 'for the rest of this window. Computed by dividing actual usage by the fraction of the window '
-      + 'elapsed -- e.g. 30% used in 40% of the time projects to 75% by reset. A quiet spell pulls '
-      + 'it down; a burst of activity pushes it up fast. Bar fill and right-hand label both show '
-      + 'projected usage %, directly comparable to the actual bar above it.';
+      'Actual usage divided by the fraction of the window elapsed — '
+      + 'e.g. 30% used in 40% of the time projects to 75% by reset. '
+      + 'A quiet spell pulls it down; a burst pushes it up.';
     document.getElementById('explainRatio').textContent =
-      'Headroom (100% minus projected) expressed as a share of the time still left in the window. '
-      + 'Answers: "of the time remaining, how much spare capacity is there?" Coloured by a four-tier '
-      + 'ladder: green (above 75%), yellow-green (<=75%), yellow (<=50%), orange (<=25%), red (<=10%). '
-      + 'Thresholds are adjustable in Settings. '
-      + 'Tick (✅) = not in the red danger zone; red cross (❌) = red-zone or projected over limit.';
+      'Headroom (100% minus predicted) as a share of time still left. '
+      + 'Tick (✅) = within limits; cross (❌) = red-zone or predicted over limit.';
     document.getElementById('explainLine').textContent =
-      'The faint vertical line marks how far through the current window you are right now. '
-      + 'Compare it to where the Actual and Projected bars end to see whether usage is tracking '
-      + 'ahead of, behind, or in line with the pace of the period.';
+      'Marks how far through the window you are right now.';
     document.getElementById('mainView').classList.add('hidden');
     document.getElementById('settingsView').classList.add('hidden');
     document.getElementById('detailView').classList.remove('hidden');
