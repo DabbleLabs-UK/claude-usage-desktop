@@ -688,7 +688,7 @@
   // e.g. "2d 14h 03m 07s", "1h 59m 04s", "0h 07m 22s"
   function timeUntilSec(iso) {
     const ms = new Date(iso) - Date.now();
-    if (ms <= 0) return '0h 00m 00s';
+    if (ms <= 0) return 'resetting...';
     const totalSec = Math.floor(ms / 1000);
     const days  = Math.floor(totalSec / 86400);
     const hours = Math.floor((totalSec % 86400) / 3600);
@@ -735,6 +735,7 @@
 
     if (windowMs) {
       const resetsAt = new Date(w.resetsAt).getTime();
+      const expired  = Date.now() >= resetsAt;
       const elapsed  = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
       const proj     = pct / elapsed;
       const pc       = color(proj); // bars use usage-% colour; threshold ladder lives on the spare ratio
@@ -805,11 +806,13 @@
         // Vertical elapsed-time marker across both bars
         + '<div class="elapsed-line"></div>'
         + '</div>'
-        // Spare ratio: coloured standalone number with 4-tier threshold colour
-        + '<div class="spare-ratio-line">Remaining period predicted spare ratio: '
-        + '<span class="spare-ratio-value" style="color:' + rc + '">' + ratioFmt + ' ' + ratioEmoji + '</span>'
-        + '</div>'
-        + weekRoundingWarn
+        // Spare ratio: coloured number, or "window ended" when the period has elapsed
+        + (expired
+          ? '<div class="spare-ratio-line" style="color:var(--muted)">Window ended — usage will update when the new period begins</div>'
+          : '<div class="spare-ratio-line">Remaining period predicted spare ratio: '
+            + '<span class="spare-ratio-value" style="color:' + rc + '">' + ratioFmt + ' ' + ratioEmoji + '</span>'
+            + '</div>'
+            + weekRoundingWarn)
         + '</div>');
     }
 
@@ -886,11 +889,17 @@
 
   setInterval(() => { if (lastData) render(lastData); }, 60000);
 
-  // Tick every second to keep countdown elements current
+  // Tick every second to keep countdown elements current.
+  // When a countdown transitions to "resetting...", trigger a full re-render so the
+  // spare-ratio line (static HTML) also switches to "window ended" within ~1 second.
   setInterval(function() {
+    let needsRender = false;
     document.querySelectorAll('.countdown[data-resets-at]').forEach(function(el) {
-      el.textContent = timeUntilSec(el.dataset.resetsAt);
+      const next = timeUntilSec(el.dataset.resetsAt);
+      if (el.textContent !== 'resetting...' && next === 'resetting...') needsRender = true;
+      el.textContent = next;
     });
+    if (needsRender && lastData) render(lastData);
   }, 1000);
 
   // ---- Card detail view ----
