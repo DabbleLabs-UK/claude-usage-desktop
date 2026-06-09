@@ -85,8 +85,10 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        // Do NOT call Application.Shutdown() here. The server and tray run for the full
+        // application lifetime -- only App.Quit() (tray "Quit") should stop them.
+        // Calling Shutdown() here was the bug: it killed Kestrel whenever CloseToTray
+        // was false and the user clicked X, even though the server should keep serving.
         base.OnClosed(e);
-        if (!((App)Application.Current).IsQuitting)
-            Application.Current.Shutdown();
     }
 }
