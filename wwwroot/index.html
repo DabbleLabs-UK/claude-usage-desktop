@@ -210,21 +210,44 @@
     /* Wrapper for both bar-rows; hosts the elapsed-line overlay */
     .bars-wrapper { position: relative; }
 
-    /* Vertical line at the elapsed-fraction position across both bars.
-       left = elapsed * track_width = elapsed * (100% - label_col)
-       label_col = width(66px) + gap(8px) = 74px */
+    /* Vertical line at the elapsed-fraction position across both bars. The position var is
+       pre-scaled by capPos in JS (--time-pos = elapsed * capPos), since the 100% mark sits at
+       capPos of the track -- so an on-pace tip (actual = elapsed * cap) lands exactly here.
+       left = --time-pos * track_width; track_width = (100% - label_col); label_col = 66+8 = 74px */
     .elapsed-line {
       position: absolute;
       top: 0; bottom: 0;
-      left: calc(var(--elapsed, 0) * (100% - 74px));
+      left: calc(var(--time-pos, 0) * (100% - 74px));
       width: 2px;
       background: rgba(255, 255, 255, 0.38);
       border-radius: 1px;
       pointer-events: none;
     }
 
-    /* Right-edge glow shown when a bar's value spills past the 100%-of-cap track.
-       The exact overflow magnitude is carried by the numeric side-label. */
+    /* 100% cap marker: fixed at capPos of the track on BOTH bars. Marks the cap on the actual bar
+       (which no longer reaches the track's right edge) and anchors the projected overflow hatch. */
+    .cap-line {
+      position: absolute;
+      top: 0; bottom: 0;
+      left: calc(var(--cap-pos, 0.75) * (100% - 74px));
+      width: 2px;
+      background: rgba(239, 68, 68, 0.55);
+      border-radius: 1px;
+      pointer-events: none;
+    }
+
+    /* Projected overflow zone: red cross-hatch from the 100% mark to the projected tip (= track end
+       when over cap). left/width are set inline (track-% on the dynamic axis). Lives in proj-track. */
+    .proj-hatch {
+      position: absolute;
+      top: 0; bottom: 0;
+      background: repeating-linear-gradient(-45deg,
+        rgba(239, 68, 68, 0.60) 0, rgba(239, 68, 68, 0.60) 3px,
+        rgba(239, 68, 68, 0.14) 3px, rgba(239, 68, 68, 0.14) 8px);
+      pointer-events: none;
+    }
+
+    /* Right-edge glow: projection runs past the visible axis end (400% clamp ceiling); read the exact number. */
     .overflow-edge {
       position: absolute;
       top: 0; bottom: 0; right: 0;
@@ -703,7 +726,10 @@
       letter-spacing: 0.08em;
       color: var(--muted);
     }
-    .chart-area { width: 100%; }
+    .chart-area {
+      width: min(100%, max(144px, calc((100dvh - 220px) * 360 / 200)));
+      align-self: center;
+    }
     .chart-area svg { display: block; width: 100%; height: auto; }
 
     .chart-legend {
@@ -1009,19 +1035,30 @@
       const proj     = pct / elapsed;
       const pc       = color(proj); // bars use usage-% colour; threshold ladder lives on the spare ratio
 
-      // Fixed 0-100%-of-cap axis for BOTH bars (no rescale). On this axis the
-      // on-pace identity holds: an on-pace user's actual tip sits at `elapsed`,
-      // which is exactly where the elapsed-line is drawn. So actual-tip vs line
-      // reads honestly as under (left) / on (at) / over (right) pace. Rescaling
-      // to a [0, proj] axis used to force actualFill === elapsed, pinning the tip
-      // on the line precisely when over pace -- the bug this replaces.
-      const actualFill = Math.min(pct, 100).toFixed(1);
-      const projFill   = Math.min(proj, 100).toFixed(1);
+      // Dynamic linear axis: the track spans 0..AXIS_MAX % of cap. Once the projection crosses 100%,
+      // AXIS_MAX = proj, so the projected tip lands flush at the track's right edge (no wasted track);
+      // under-pace, AXIS_MAX = 100 for a plain full-width 0..100 axis. The 100% cap mark sits at
+      // capPos = 100/AXIS_MAX of the track. The honest pace read (green tip vs time-line) is PRESERVED
+      // under ANY axis because the time-line is pre-scaled by capPos (--time-pos = elapsed * capPos) --
+      // it tracks the CAP, not the raw track edge. Actual fill = pct/AXIS_MAX, projected = proj/AXIS_MAX.
+      // (Do NOT anchor the time-line to raw elapsed, nor reintroduce a [0, proj] scale for the actual bar.)
+      const AXIS_MAX = Math.min(400, Math.max(100, proj));   // track right edge: projection, or 100 under-pace; capped at 400%
+      const capPos   = 100 / AXIS_MAX;          // 100% cap mark as a fraction of track width (1.0 when under-pace)
+      const tk       = v => Math.min(v, AXIS_MAX) / AXIS_MAX * 100;   // value% -> track width %
+      const capTrackPct = (capPos * 100).toFixed(2);                 // track-% of the 100% mark
 
-      // Overflow indicator: red glow at the track's right edge when a bar would
-      // spill past the cap. Exact magnitude is carried by the numeric side-label.
-      const actualOver = pct  > 100 ? '<div class="overflow-edge"></div>' : '';
-      const projOver   = proj > 100 ? '<div class="overflow-edge"></div>' : '';
+      const actualFill = tk(pct).toFixed(2);              // honest 0..cap (extends past mark if pct>100)
+      const projFill   = tk(proj).toFixed(2);             // projected bar: solid all the way to its tip
+
+      // Projected overflow zone: red hatch from the 100% mark to the projected tip (clamped to axis
+      // end). Rendered on the ACTUAL bar's track -- to the right of where the green fill ends -- so
+      // the projected bar itself stays a clean solid fill.
+      const projHatch = proj > 100
+        ? '<div class="proj-hatch" style="left:' + capTrackPct + '%;width:'
+          + (tk(proj) - capPos * 100).toFixed(2) + '%"></div>'
+        : '';
+      // Projection beyond the visible axis end: small right-edge glow -> read the exact number.
+      const projClamp = proj > AXIS_MAX ? '<div class="overflow-edge"></div>' : '';
 
       // Spare ratio: (headroom / remaining period) * 100; uncapped
       const remPeriod  = (1 - elapsed) * 100;
@@ -1050,19 +1087,22 @@
         + '<span class="label">' + (compactLabel || label) + '</span>'
         + '<span class="countdown" data-resets-at="' + w.resetsAt + '">' + timeUntilSec(w.resetsAt) + '</span>'
         + '</div>'
-        // Both bars in a wrapper so the elapsed-line can span them both
-        + '<div class="bars-wrapper" style="--elapsed:' + elapsed.toFixed(4) + '">'
-        // Actual bar (ghosted): fixed 0-100%-of-cap fill; overflow glow if past cap
+        // Both bars in a wrapper so the cap-line and elapsed-line can span them both. The line
+        // positions are pre-scaled by capPos (time-pos = elapsed * capPos; cap-pos = capPos).
+        + '<div class="bars-wrapper" style="--time-pos:' + (elapsed * capPos).toFixed(4) + ';--cap-pos:' + capPos.toFixed(4) + '">'
+        // Actual bar (ghosted): honest fill on the fixed axis; never moves with projection. The
+        // projected-overflow hatch sits on this row, past the 100% cap-line (right of the green fill).
         + '<div class="bar-row"><div class="track">'
         + '<div class="fill" style="width:' + actualFill + '%;background:' + c + ';opacity:0.55"></div>'
-        + actualOver
+        + projHatch
         + '</div><span class="bar-side-label" style="color:' + c + '">' + fmtPct(pct) + '</span></div>'
-        // Projected bar (solid): fixed 0-100%-of-cap fill; overflow glow if past cap
+        // Projected bar: clean solid fill all the way to the projected tip (clamp glow past axis end)
         + '<div class="bar-row"><div class="proj-track">'
         + '<div class="fill" style="width:' + projFill + '%;background:' + pc + '"></div>'
-        + projOver
+        + projClamp
         + '</div><span class="bar-side-label" style="color:' + pc + '">' + fmtPct(proj) + '</span></div>'
-        // Vertical elapsed-time marker across both bars
+        // 100% cap marker + elapsed-time marker, both spanning the two bars
+        + '<div class="cap-line"></div>'
         + '<div class="elapsed-line"></div>'
         + '</div>'
         // Spare ratio: coloured number, or "window ended" when the period has elapsed
@@ -1343,6 +1383,13 @@
       + '</svg>';
   }
 
+  function _hideAllViews() {
+    document.getElementById('mainView').classList.add('hidden');
+    document.getElementById('settingsView').classList.add('hidden');
+    document.getElementById('detailView').classList.add('hidden');
+    document.getElementById('statsView').classList.add('hidden');
+  }
+
   window.openDetail = function(cardKey) {
     const d = _cardDataMap[cardKey];
     if (!d || !d.w) return;
@@ -1395,8 +1442,7 @@
       : 'Usage so far in this window, as a % of the rate limit.';
     document.getElementById('explainLine').textContent =
       'Marks how far through the window you are right now.';
-    document.getElementById('mainView').classList.add('hidden');
-    document.getElementById('settingsView').classList.add('hidden');
+    _hideAllViews();
     document.getElementById('detailView').classList.remove('hidden');
     _checkToolbarOverflow();
   };
@@ -1582,10 +1628,10 @@
   const _RANGE_MS = { '1d': 86400000, '7d': 604800000, '30d': 2592000000 };
 
   window.openStats = function() {
-    history.pushState({ view: 'stats' }, '');
-    document.getElementById('mainView').classList.add('hidden');
-    document.getElementById('settingsView').classList.add('hidden');
-    document.getElementById('detailView').classList.add('hidden');
+    const atMain = !history.state || history.state.view === 'main';
+    if (atMain) history.pushState({ view: 'stats' }, '');
+    else        history.replaceState({ view: 'stats' }, '');
+    _hideAllViews();
     document.getElementById('statsView').classList.remove('hidden');
     _markActiveChip();
     loadStats();
@@ -1706,8 +1752,10 @@
   // ---- Settings ----
 
   window.openSettings = function() {
-    history.pushState({ view: 'settings' }, '');
-    document.getElementById('mainView').classList.add('hidden');
+    const atMain = !history.state || history.state.view === 'main';
+    if (atMain) history.pushState({ view: 'settings' }, '');
+    else        history.replaceState({ view: 'settings' }, '');
+    _hideAllViews();
     document.getElementById('settingsView').classList.remove('hidden');
     loadSettings();
     _checkToolbarOverflow();
