@@ -14,6 +14,7 @@ public sealed class UsagePoller : BackgroundService
 
     private readonly UsageService _usageService;
     private readonly UsageState _state;
+    private readonly UsageLog _log;
     private readonly IHubContext<UsageHub> _hub;
     private readonly ILogger<UsagePoller> _logger;
     private readonly SemaphoreSlim _wakeSignal = new(0, 1);
@@ -24,11 +25,13 @@ public sealed class UsagePoller : BackgroundService
     public UsagePoller(
         UsageService usageService,
         UsageState state,
+        UsageLog log,
         IHubContext<UsageHub> hub,
         ILogger<UsagePoller> logger)
     {
         _usageService = usageService;
         _state = state;
+        _log = log;
         _hub = hub;
         _logger = logger;
     }
@@ -64,6 +67,10 @@ public sealed class UsagePoller : BackgroundService
         {
             var data = await _usageService.FetchAsync();
             _state.Update(data);
+
+            // Persist a sample on success only (never on a failed poll). Best-effort:
+            // UsageLog swallows its own faults so logging can't disrupt polling.
+            _log.Append(data);
 
             // Clear backoff on success
             if (_failureCount > 0)

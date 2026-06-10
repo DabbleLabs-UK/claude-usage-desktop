@@ -2,3 +2,7 @@ bin/
 obj/
 *.user
 .vs/
+dist/
+publish/
+binBuildCheck/
+*.zip

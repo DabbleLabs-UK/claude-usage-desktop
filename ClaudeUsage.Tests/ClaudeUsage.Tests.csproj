@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ClaudeUsage.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Link the calculator source directly. It has zero dependencies, so the tests build
+       and run without dragging in WPF/WinForms or the shared About project. -->
+  <ItemGroup>
+    <Compile Include="..\Services\CumulativeUsage.cs" Link="CumulativeUsage.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

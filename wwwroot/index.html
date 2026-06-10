@@ -223,13 +223,13 @@
       pointer-events: none;
     }
 
-    /* Divider marking the 100% point when bars are on a rescaled >100% axis */
-    .overflow-mark {
+    /* Right-edge glow shown when a bar's value spills past the 100%-of-cap track.
+       The exact overflow magnitude is carried by the numeric side-label. */
+    .overflow-edge {
       position: absolute;
-      top: 0; bottom: 0;
-      width: 2px;
-      background: rgba(239, 68, 68, 0.80);
-      border-radius: 1px;
+      top: 0; bottom: 0; right: 0;
+      width: 8px;
+      background: linear-gradient(90deg, rgba(239, 68, 68, 0) 0%, rgba(239, 68, 68, 0.9) 100%);
       pointer-events: none;
     }
 
@@ -372,6 +372,84 @@
       border-radius: 7px;
     }
     .back-btn:hover { color: var(--text); border-color: var(--muted); }
+
+    /* ---- About modal: in-page, shown to ALL clients (browser, phone, embedded WebView2) ---- */
+    .about-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.6);
+    }
+    .about-overlay.hidden { display: none; }
+
+    .about-modal {
+      position: relative;
+      width: 100%;
+      max-width: 320px;
+      max-height: calc(100dvh - 40px);
+      overflow-y: auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 26px 24px 20px;
+      text-align: center;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+    }
+
+    .about-close {
+      position: absolute;
+      top: 10px; right: 10px;
+      width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      background: none;
+      border: none;
+      border-radius: 7px;
+      color: var(--muted);
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .about-close:hover { color: var(--text); background: var(--border); }
+
+    .about-app-name {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .about-tagline {
+      margin-top: 10px;
+      font-size: 0.82rem;
+      color: var(--text);
+      line-height: 1.4;
+    }
+    .about-logo {
+      display: block;
+      width: 160px;
+      height: auto;
+      margin: 16px auto 0;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    .about-links {
+      margin-top: 18px;
+      font-size: 0.78rem;
+    }
+    .about-links a { color: var(--accent); text-decoration: none; }
+    .about-links a:hover { text-decoration: underline; }
+    .about-links .sep { color: var(--muted); margin: 0 8px; }
+
+    .about-copyright,
+    .about-version {
+      margin-top: 8px;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .about-copyright a { color: var(--muted); text-decoration: none; }
+    .about-copyright a:hover { text-decoration: underline; }
 
     .setting-card {
       background: var(--card);
@@ -574,6 +652,78 @@
       color: var(--dim);
       line-height: 1.55;
     }
+
+    /* Stats view */
+    .stats-view {
+      flex: 1;
+      padding: 12px 12px 52px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+    }
+
+    /* Range chips: 1d / 7d / 30d */
+    .range-chips {
+      display: flex;
+      gap: 8px;
+    }
+    .chip {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--dim);
+      font-size: 0.78rem;
+      font-weight: 700;
+      padding: 7px 0;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .chip:hover { color: var(--text); border-color: var(--muted); }
+    .chip.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #0d0d1a;
+    }
+
+    .chart-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 12px 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .chart-title {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .chart-area { width: 100%; }
+    .chart-area svg { display: block; width: 100%; height: auto; }
+
+    .chart-legend {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      font-size: 0.7rem;
+      color: var(--dim);
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-swatch { width: 18px; height: 0; border-radius: 2px; }
+    .legend-swatch.session { border-top: 3px solid var(--accent); }
+    .legend-swatch.week    { border-top: 2px dashed var(--dim); }
+
+    .chart-note {
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -703,6 +853,26 @@
   </div>
 </div>
 
+<div id="statsView" class="stats-view hidden">
+  <div class="detail-header">
+    <button class="back-btn" onclick="history.back()">&#8592; Back</button>
+    <span class="detail-title">Statistics</span>
+  </div>
+  <div class="range-chips" id="rangeChips">
+    <button class="chip" data-range="1d" onclick="setStatsRange('1d')">1d</button>
+    <button class="chip" data-range="7d" onclick="setStatsRange('7d')">7d</button>
+    <button class="chip" data-range="30d" onclick="setStatsRange('30d')">30d</button>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Cumulative % consumed</div>
+    <div id="statsChart" class="chart-area"></div>
+    <div class="chart-legend">
+      <span class="legend-item"><span class="legend-swatch session"></span>Session</span>
+      <span class="legend-item"><span class="legend-swatch week"></span>Week</span>
+    </div>
+  </div>
+</div>
+
 <div class="toolbar">
   <div class="meta">
     <div class="meta-text">
@@ -710,8 +880,37 @@
       <span class="stale" id="staleEl">Stale</span>
     </div>
   </div>
+  <button class="gear-btn" onclick="openStats()" title="Stats">
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" style="vertical-align:-2px">
+      <rect x="1" y="8" width="3" height="6" rx="0.5"></rect>
+      <rect x="6.5" y="5" width="3" height="9" rx="0.5"></rect>
+      <rect x="12" y="2" width="3" height="12" rx="0.5"></rect>
+    </svg>
+  </button>
   <button class="gear-btn" onclick="openAbout()" title="About">&#9432;</button>
   <button class="gear-btn" onclick="openSettings()" title="Settings">&#9881;</button>
+</div>
+
+<!-- About modal: in-page, served from wwwroot; shown to every client incl. the embedded WebView2.
+     Mirrors the content of the former native DabbleLabs AboutWindow (tagline, brand logo, ToS/Privacy,
+     copyright, version). Links target _blank -> external browser (the WebView2 host routes new windows
+     to the default browser). -->
+<div id="aboutOverlay" class="about-overlay hidden" onclick="if (event.target === this) history.back()">
+  <div class="about-modal" role="dialog" aria-modal="true" aria-label="About Claude Usage">
+    <button class="about-close" onclick="history.back()" title="Close" aria-label="Close">&times;</button>
+    <div class="about-app-name">Claude Usage</div>
+    <div class="about-tagline">Visit for more apps you might love!</div>
+    <a href="https://dabblelabs.uk" target="_blank" rel="noopener">
+      <img class="about-logo" src="logo_dabblelabs.png" alt="DabbleLabs">
+    </a>
+    <div class="about-links">
+      <a href="https://dabblelabs.uk/claude-usage-desktop/tos.html" target="_blank" rel="noopener">Terms of Service</a>
+      <span class="sep">-</span>
+      <a href="https://dabblelabs.uk/claude-usage-desktop/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
+    </div>
+    <div class="about-copyright">&copy; <span id="aboutYear"></span> <a href="mailto:jody.florian@gmail.com">Jody Florian</a></div>
+    <div class="about-version" id="aboutVersion"></div>
+  </div>
 </div>
 
 <script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
@@ -810,27 +1009,19 @@
       const proj     = pct / elapsed;
       const pc       = color(proj); // bars use usage-% colour; threshold ladder lives on the spare ratio
 
-      // Shared-scale rescale: when proj > 100 both bars use [0, proj] axis so
-      // they remain directly comparable. The 100% mark sits partway along the track.
-      const overLimit  = proj > 100;
-      const scale      = overLimit ? proj : 100;
-      const actualFill = (Math.min(pct, scale) / scale * 100).toFixed(1);
-      const projFill   = (proj / scale * 100).toFixed(1); // = 100 when overLimit
-      const p100pos    = (100 / scale * 100).toFixed(1);  // track-% where 100% sits
+      // Fixed 0-100%-of-cap axis for BOTH bars (no rescale). On this axis the
+      // on-pace identity holds: an on-pace user's actual tip sits at `elapsed`,
+      // which is exactly where the elapsed-line is drawn. So actual-tip vs line
+      // reads honestly as under (left) / on (at) / over (right) pace. Rescaling
+      // to a [0, proj] axis used to force actualFill === elapsed, pinning the tip
+      // on the line precisely when over pace -- the bug this replaces.
+      const actualFill = Math.min(pct, 100).toFixed(1);
+      const projFill   = Math.min(proj, 100).toFixed(1);
 
-      // Cross-hatch red over-limit zone, drawn as an absolutely-positioned overlay div
-      // spanning [100% marker]->[track right edge]. Used identically on BOTH bars so the
-      // hatch lines up vertically. NB: do NOT use a CSS background-position percentage for
-      // this -- when the image is narrower than the track, `background-position: X%` aligns
-      // the image's X% point with the track's X% point (offset = (track-image)*X%), which
-      // for our sizes lands the hatch's CENTRE near the 100% mark instead of its left edge.
-      const hatchBg = 'repeating-linear-gradient(-45deg,rgba(239,68,68,0.35) 0,rgba(239,68,68,0.35) 3px,transparent 3px,transparent 8px)';
-      const overflowHatch = overLimit
-        ? '<div style="position:absolute;top:0;bottom:0;left:' + p100pos + '%;right:0;background:' + hatchBg + ';pointer-events:none"></div>'
-        : '';
-      const overflowMark = overLimit
-        ? '<div class="overflow-mark" style="left:' + p100pos + '%"></div>'
-        : '';
+      // Overflow indicator: red glow at the track's right edge when a bar would
+      // spill past the cap. Exact magnitude is carried by the numeric side-label.
+      const actualOver = pct  > 100 ? '<div class="overflow-edge"></div>' : '';
+      const projOver   = proj > 100 ? '<div class="overflow-edge"></div>' : '';
 
       // Spare ratio: (headroom / remaining period) * 100; uncapped
       const remPeriod  = (1 - elapsed) * 100;
@@ -861,17 +1052,15 @@
         + '</div>'
         // Both bars in a wrapper so the elapsed-line can span them both
         + '<div class="bars-wrapper" style="--elapsed:' + elapsed.toFixed(4) + '">'
-        // Actual bar (ghosted): rescaled fill; hatch over-limit zone + 100% mark when rescaled
+        // Actual bar (ghosted): fixed 0-100%-of-cap fill; overflow glow if past cap
         + '<div class="bar-row"><div class="track">'
         + '<div class="fill" style="width:' + actualFill + '%;background:' + c + ';opacity:0.55"></div>'
-        + overflowHatch
-        + overflowMark
+        + actualOver
         + '</div><span class="bar-side-label" style="color:' + c + '">' + fmtPct(pct) + '</span></div>'
-        // Projected bar (solid): rescaled fill; 100% mark when rescaled
+        // Projected bar (solid): fixed 0-100%-of-cap fill; overflow glow if past cap
         + '<div class="bar-row"><div class="proj-track">'
         + '<div class="fill" style="width:' + projFill + '%;background:' + pc + '"></div>'
-        + overflowHatch
-        + overflowMark
+        + projOver
         + '</div><span class="bar-side-label" style="color:' + pc + '">' + fmtPct(proj) + '</span></div>'
         // Vertical elapsed-time marker across both bars
         + '<div class="elapsed-line"></div>'
@@ -1344,22 +1533,175 @@
   history.replaceState({ view: 'main' }, '');
 
   window.addEventListener('popstate', function(e) {
+    // About is a modal layered over whatever view is showing -- it's always the last pushed state,
+    // so any back gesture closes it first and reveals the underlying view untouched.
+    if (!document.getElementById('aboutOverlay').classList.contains('hidden')) { closeAbout(); return; }
     const view = (e.state && e.state.view) || 'main';
     if (view === 'main') {
       if (_openCardKey !== null) closeDetail();
       else if (!document.getElementById('settingsView').classList.contains('hidden')) closeSettings();
+      else if (!document.getElementById('statsView').classList.contains('hidden')) closeStats();
     }
   });
 
   // ---- About ----
-  // The About body is the shared DabbleLabs WPF control, hosted by the C# shell. We can't render it
-  // in the page, so the button asks the host (via a WebView2 message) to pop the AboutWindow.
+  // In-page modal served from wwwroot -- works identically in any browser, on the phone (relative
+  // URLs), and in the embedded WebView2. No window.chrome.webview dependency. Version comes from the
+  // /api/version endpoint, fetched once on first open.
+
+  let _aboutVersionLoaded = false;
 
   window.openAbout = function() {
-    if (window.chrome && window.chrome.webview) {
-      window.chrome.webview.postMessage('about');
+    history.pushState({ view: 'about' }, '');
+    document.getElementById('aboutYear').textContent = new Date().getFullYear();
+    document.getElementById('aboutOverlay').classList.remove('hidden');
+    if (!_aboutVersionLoaded) {
+      fetch('/api/version')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) {
+          if (d && d.version) {
+            document.getElementById('aboutVersion').textContent = 'v' + d.version;
+            _aboutVersionLoaded = true;
+          }
+        })
+        .catch(function() { /* host down / offline: leave the version line blank */ });
     }
   };
+
+  // Pure hide -- history is unwound by the caller (close button / backdrop call history.back(),
+  // which fires popstate). Safe to call when already hidden.
+  function closeAbout() {
+    document.getElementById('aboutOverlay').classList.add('hidden');
+  }
+  window.closeAbout = closeAbout;
+
+  // ---- Stats ----
+
+  let _statsRange = '1d';
+  let _statsData  = null;
+  const _RANGE_MS = { '1d': 86400000, '7d': 604800000, '30d': 2592000000 };
+
+  window.openStats = function() {
+    history.pushState({ view: 'stats' }, '');
+    document.getElementById('mainView').classList.add('hidden');
+    document.getElementById('settingsView').classList.add('hidden');
+    document.getElementById('detailView').classList.add('hidden');
+    document.getElementById('statsView').classList.remove('hidden');
+    _markActiveChip();
+    loadStats();
+    _checkToolbarOverflow();
+  };
+
+  function closeStats() {
+    document.getElementById('statsView').classList.add('hidden');
+    document.getElementById('mainView').classList.remove('hidden');
+    _checkToolbarOverflow();
+  }
+  window.closeStats = closeStats;
+
+  window.setStatsRange = function(r) {
+    if (!_RANGE_MS[r] || r === _statsRange) { if (_RANGE_MS[r]) { _markActiveChip(); loadStats(); } return; }
+    _statsRange = r;
+    _markActiveChip();
+    loadStats();
+  };
+
+  function _markActiveChip() {
+    document.querySelectorAll('#rangeChips .chip').forEach(function(c) {
+      c.classList.toggle('active', c.dataset.range === _statsRange);
+    });
+  }
+
+  async function loadStats() {
+    const host = document.getElementById('statsChart');
+    try {
+      const r = await fetch('/api/usage-log?range=' + _statsRange);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      _statsData = await r.json();
+    } catch (e) {
+      _statsData = null;
+    }
+    host.innerHTML = renderStatsChart(_statsData, _statsRange);
+    _checkToolbarOverflow();
+  }
+
+  // Hand-rolled SVG line chart: two cumulative series (session solid, week dashed/lighter)
+  // on a shared y-axis. y max = the larger series' cumulative total in range (auto-fit,
+  // may exceed 100%). x domain = the full selected range [now-span, now]. No smoothing --
+  // points are joined with straight segments so the steppy integer-% transitions show.
+  function renderStatsChart(data, range) {
+    const W = 360, H = 200;
+    const padL = 40, padR = 12, padT = 12, padB = 24;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+    const axis = 'var(--muted)';
+    const grid = 'rgba(255,255,255,0.07)';
+
+    const now    = Date.now();
+    const spanMs = _RANGE_MS[range] || _RANGE_MS['1d'];
+    const tMin   = now - spanMs;
+
+    const toPts = arr => (arr || []).map(p => ({ ms: new Date(p.t).getTime(), v: p.v }));
+    const session = toPts(data && data.session);
+    const week    = toPts(data && data.week);
+
+    // Sparse/empty: too few logged points to draw a line on either series.
+    const sparse = session.length < 2 && week.length < 2;
+
+    const sTot = session.length ? session[session.length - 1].v : 0;
+    const wTot = week.length    ? week[week.length - 1].v       : 0;
+    let yTop = Math.max(sTot, wTot);
+    if (!(yTop > 0)) yTop = 10; // flat / no data -> keep the axis sane
+
+    const x = ms => padL + ((ms - tMin) / spanMs) * plotW;
+    const y = v  => padT + plotH - (Math.min(v, yTop) / yTop) * plotH;
+
+    const fmtV = n => (n % 1 === 0 ? n.toFixed(0) : n.toFixed(1));
+    const fmtT = ms => {
+      const d = new Date(ms);
+      return spanMs <= 86400000
+        ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : (d.getMonth() + 1) + '/' + d.getDate();
+    };
+
+    let g = '';
+    [0, 0.5, 1].forEach(function(f) {
+      const yy = padT + plotH - f * plotH;
+      g += '<line x1="' + padL + '" y1="' + yy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + yy.toFixed(1)
+         + '" stroke="' + grid + '" stroke-width="1"/>'
+         + '<text x="' + (padL - 5) + '" y="' + (yy + 3).toFixed(1) + '" text-anchor="end" fill="' + axis
+         + '" font-size="8" font-family="system-ui,sans-serif">' + fmtV(yTop * f) + '</text>';
+    });
+
+    let xl = '';
+    [0, 0.5, 1].forEach(function(f) {
+      const xx = padL + f * plotW;
+      const anchor = f === 0 ? 'start' : (f === 1 ? 'end' : 'middle');
+      xl += '<text x="' + xx.toFixed(1) + '" y="' + (H - 8) + '" text-anchor="' + anchor + '" fill="' + axis
+          + '" font-size="8" font-family="system-ui,sans-serif">' + fmtT(tMin + f * spanMs) + '</text>';
+    });
+
+    const poly = pts => pts.map(p => x(p.ms).toFixed(1) + ',' + y(p.v).toFixed(1)).join(' ');
+    let series = '';
+    if (!sparse) {
+      if (week.length >= 2)
+        series += '<polyline fill="none" stroke="var(--dim)" stroke-width="1.5" stroke-dasharray="4,3"'
+                + ' stroke-linejoin="round" points="' + poly(week) + '"/>';
+      if (session.length >= 2)
+        series += '<polyline fill="none" stroke="var(--accent)" stroke-width="2"'
+                + ' stroke-linejoin="round" points="' + poly(session) + '"/>';
+    }
+
+    const frame = '<rect x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + plotH
+                + '" fill="none" stroke="var(--border)" stroke-width="1"/>';
+    const empty = sparse
+      ? '<text x="' + (padL + plotW / 2) + '" y="' + (padT + plotH / 2) + '" text-anchor="middle" fill="' + axis
+        + '" font-size="10" font-family="system-ui,sans-serif">Collecting data — check back soon</text>'
+      : '';
+
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">'
+         + g + frame + series + xl + empty + '</svg>';
+  }
 
   // ---- Settings ----
 
@@ -1594,7 +1936,7 @@
   let _toolbarNeedsHide = false;
 
   function _checkToolbarOverflow() {
-    const ids = ['mainView', 'settingsView', 'detailView'];
+    const ids = ['mainView', 'settingsView', 'detailView', 'statsView'];
     for (let i = 0; i < ids.length; i++) {
       const el = document.getElementById(ids[i]);
       if (el && !el.classList.contains('hidden')) {
@@ -1622,7 +1964,7 @@
     if (_toolbarNeedsHide) _toolbarEl.classList.add('toolbar-hidden');
   }
 
-  ['mainView', 'settingsView', 'detailView'].forEach(function(id) {
+  ['mainView', 'settingsView', 'detailView', 'statsView'].forEach(function(id) {
     const el = document.getElementById(id);
     if (!el) return;
     let lastTop = 0;

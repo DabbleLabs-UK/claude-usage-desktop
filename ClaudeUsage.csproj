@@ -9,13 +9,22 @@
     <RootNamespace>ClaudeUsage</RootNamespace>
     <AssemblyName>ClaudeUsage</AssemblyName>
     <ApplicationIcon>design\logo_icon.ico</ApplicationIcon>
-    <Version>0.1.16</Version>
-    <AssemblyVersion>0.1.16.0</AssemblyVersion>
-    <FileVersion>0.1.16.0</FileVersion>
+    <Version>0.1.17</Version>
+    <AssemblyVersion>0.1.17.0</AssemblyVersion>
+    <FileVersion>0.1.17.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!-- The test project lives in a subfolder of this project's directory, so the SDK's
+       default recursive globs would otherwise pull its sources into this build. -->
+  <ItemGroup>
+    <Compile Remove="ClaudeUsage.Tests\**" />
+    <Content Remove="ClaudeUsage.Tests\**" />
+    <None Remove="ClaudeUsage.Tests\**" />
+    <EmbeddedResource Remove="ClaudeUsage.Tests\**" />
   </ItemGroup>
 
   <!-- UseWindowsForms adds a global implicit 'using System.Windows.Forms' which
@@ -27,12 +36,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.*" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- Shared DabbleLabs WPF About control (sibling checkout; same source-dependency pattern as the
-         Android dabblelabs-common includeBuild). Shown in a popup AboutWindow from the toolbar. -->
-    <ProjectReference Include="..\dl-wpf-about-common\DabbleLabs.Wpf.About\DabbleLabs.Wpf.About.csproj" />
   </ItemGroup>
 
   <ItemGroup>

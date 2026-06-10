@@ -113,9 +113,11 @@ public partial class App : Application
             menu.Items.Add(new WinForms.ToolStripSeparator());
             menu.Items.Add("Quit", null, (_, _) => Quit());
 
+            var icon = CreateTrayIcon();
+
             _notifyIcon = new WinForms.NotifyIcon
             {
-                Icon = CreateTrayIcon(),
+                Icon = icon,
                 Text = "Claude Usage",
                 ContextMenuStrip = menu,
             };
@@ -143,7 +145,8 @@ public partial class App : Application
         try
         {
             var asm = typeof(App).Assembly;
-            var name = Array.Find(asm.GetManifestResourceNames(),
+            var names = asm.GetManifestResourceNames();
+            var name = Array.Find(names,
                 n => n.EndsWith("logo_icon.ico", StringComparison.OrdinalIgnoreCase));
             if (name is not null)
             {
@@ -165,7 +168,8 @@ public partial class App : Application
             if (exePath is not null)
             {
                 var icon = Drawing.Icon.ExtractAssociatedIcon(exePath);
-                if (icon is not null) return icon;
+                if (icon is not null)
+                    return icon;
             }
         }
         catch { }
@@ -306,6 +310,7 @@ public partial class App : Application
         builder.Services.AddSingleton(SettingsService);
         builder.Services.AddSingleton(_firewallService);
         builder.Services.AddSingleton<UsageState>();
+        builder.Services.AddSingleton<UsageLog>();
         builder.Services.AddSingleton<UsageService>();
         builder.Services.AddSingleton<UsagePoller>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<UsagePoller>());
@@ -324,6 +329,41 @@ public partial class App : Application
 
         app.MapGet("/api/backoff", (UsageState state) =>
             Results.Ok(state.Backoff));
+
+        // Cumulative usage series for the stats graph. range = 1d | 7d | 30d (default 1d).
+        // Returns the SESSION (five_hour) and WEEK (seven_day) series, each computed from
+        // the logged samples in range via the cumulative-positive-delta calculator. Points
+        // are { t: UTC ISO, v: cumulative % }. hasData is false when nothing is logged yet.
+        app.MapGet("/api/usage-log", (UsageLog log, string? range) =>
+        {
+            var span = range switch
+            {
+                "30d" => TimeSpan.FromDays(30),
+                "7d"  => TimeSpan.FromDays(7),
+                _     => TimeSpan.FromDays(1),
+            };
+
+            var now     = DateTimeOffset.UtcNow;
+            var samples = log.ReadRange(now - span, now);
+
+            static object[] ToPoints(List<CumulativePoint> pts) =>
+                pts.Select(p => (object)new
+                {
+                    t = p.Time.ToUniversalTime().ToString("o"),
+                    v = p.Cumulative,
+                }).ToArray();
+
+            var session = CumulativeUsage.Compute(UsageLog.SeriesFor(samples, "five_hour"));
+            var week    = CumulativeUsage.Compute(UsageLog.SeriesFor(samples, "seven_day"));
+
+            return Results.Ok(new
+            {
+                hasData = samples.Count > 0,
+                range   = range ?? "1d",
+                session = ToPoints(session),
+                week    = ToPoints(week),
+            });
+        });
 
         app.MapGet("/api/settings", (SettingsService settings) =>
             Results.Ok(settings.Current with { StartWithWindows = settings.GetActualAutostart() }));
