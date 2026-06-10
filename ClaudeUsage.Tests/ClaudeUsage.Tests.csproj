@@ -12,6 +12,7 @@
        and run without dragging in WPF/WinForms or the shared About project. -->
   <ItemGroup>
     <Compile Include="..\Services\CumulativeUsage.cs" Link="CumulativeUsage.cs" />
+    <Compile Include="..\Services\RefreshCooldownPolicy.cs" Link="RefreshCooldownPolicy.cs" />
   </ItemGroup>
 
   <ItemGroup>

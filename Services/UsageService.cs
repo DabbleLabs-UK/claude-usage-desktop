@@ -18,9 +18,21 @@ public sealed class UsageService
     // Proactively refresh when the access token is expired or within this window of expiry.
     private const long RefreshSkewMs = 5 * 60 * 1000; // 5 minutes
 
+    // Refresh-specific cooldown after a 429 from the TOKEN endpoint. Without this the poller
+    // re-fires a proactive refresh every cycle once the token is expired; each attempt resets
+    // the endpoint's rate-limit clock, so the app locks ITSELF out indefinitely. The duration
+    // policy (Retry-After, else exponential ramp) lives in RefreshCooldownPolicy. During
+    // cooldown NO refresh (proactive or reactive) may fire.
+
     private static readonly HttpClient _http = new();
     private readonly ILogger<UsageService> _logger;
     private readonly AuthRefreshLog _authLog;
+
+    // Cooldown state. Mutated only from FetchAsync/TryRefreshAsync, which the single
+    // background poller calls strictly sequentially (never concurrently), so plain fields
+    // are sufficient -- no locking required.
+    private long _refreshCooldownUntilMs;   // unix-ms; refresh suppressed until this instant
+    private int  _consecutive429;           // consecutive token-endpoint 429s; drives the ramp
 
     public UsageService(ILogger<UsageService> logger, AuthRefreshLog authLog)
     {
@@ -57,17 +69,26 @@ public sealed class UsageService
 
         if (creds.RefreshToken is not null && IsExpiringSoon(creds.ExpiresAt))
         {
-            refreshAttempted = true;
-            _authLog.Log("PROACTIVE refresh firing (token expired or within skew window).");
-            var refreshed = await TryRefreshAsync(creds.RefreshToken);
-            if (refreshed is not null)
+            if (IsInRefreshCooldown(out var remaining))
             {
-                creds = refreshed;
-                _authLog.Log("PROACTIVE refresh succeeded; polling with fresh token.");
+                // Suppressed by an earlier 429. Do NOT spend the attempt; let the poll fail to
+                // the poller's own backoff. This is the whole fix for the self-inflicted 429.
+                _authLog.Log($"PROACTIVE refresh SKIPPED: in cooldown, {remaining / 1000}s remaining.");
             }
             else
             {
-                _authLog.Log("PROACTIVE refresh failed; polling with existing (likely expired) token.");
+                refreshAttempted = true;
+                _authLog.Log("PROACTIVE refresh firing (token expired or within skew window).");
+                var refreshed = await TryRefreshAsync(creds.RefreshToken);
+                if (refreshed is not null)
+                {
+                    creds = refreshed;
+                    _authLog.Log("PROACTIVE refresh succeeded; polling with fresh token.");
+                }
+                else
+                {
+                    _authLog.Log("PROACTIVE refresh failed; polling with existing (likely expired) token.");
+                }
             }
         }
 
@@ -87,6 +108,11 @@ public sealed class UsageService
             // The poll came back 401 and we have NOT already spent our refresh this cycle.
             // Try exactly one refresh, then retry the poll once. If the refresh fails, or the
             // retried poll still 401s, the exception propagates to the poller's backoff path.
+            if (IsInRefreshCooldown(out var remaining))
+            {
+                _authLog.Log($"REACTIVE refresh SKIPPED: in cooldown, {remaining / 1000}s remaining; propagating 401 to poller backoff.");
+                throw;
+            }
             _authLog.Log("REACTIVE: poll 401, gate open (no refresh this cycle), refresh token present => attempting one reactive refresh.");
             _logger.LogWarning("Usage poll returned 401; attempting one token refresh.");
             var refreshed = await TryRefreshAsync(creds.RefreshToken);
@@ -135,6 +161,52 @@ public sealed class UsageService
         return expiresAtMs - nowMs <= RefreshSkewMs;
     }
 
+    // True while refresh is suppressed by a prior 429; remainingMs is the time left (>0).
+    private bool IsInRefreshCooldown(out long remainingMs)
+    {
+        remainingMs = _refreshCooldownUntilMs - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return remainingMs > 0;
+    }
+
+    // Records a token-endpoint 429: bumps the consecutive counter, computes the cooldown
+    // duration (Retry-After wins; otherwise the exponential ramp), and arms the suppression.
+    private void EnterRefreshCooldown(HttpResponseMessage response)
+    {
+        _consecutive429++;
+        var retryAfterMs = RetryAfterMs(response);
+        var cooldownMs   = RefreshCooldownPolicy.ComputeMs(_consecutive429, retryAfterMs);
+        _refreshCooldownUntilMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + cooldownMs;
+
+        var basis = retryAfterMs is { } ra ? $"Retry-After={ra}ms" : $"exponential ramp (consecutive429={_consecutive429})";
+        _authLog.Log(
+            $"REFRESH 429 -> cooldown ENTERED: {cooldownMs}ms (~{cooldownMs / 60000}min) via {basis}; " +
+            $"no refresh until {FormatMs(_refreshCooldownUntilMs)}.");
+    }
+
+    // Clears the cooldown (called on any refresh success). Logs only if something was armed.
+    private void ClearRefreshCooldown(string reason)
+    {
+        if (_refreshCooldownUntilMs != 0 || _consecutive429 != 0)
+            _authLog.Log($"REFRESH cooldown CLEARED ({reason}).");
+        _refreshCooldownUntilMs = 0;
+        _consecutive429 = 0;
+    }
+
+    // Reads Retry-After as milliseconds: delta-seconds form or HTTP-date form. Null if absent;
+    // a past date clamps to 0 (caller treats that as "no server-imposed wait").
+    private static long? RetryAfterMs(HttpResponseMessage response)
+    {
+        var ra = response.Headers.RetryAfter;
+        if (ra is null) return null;
+        if (ra.Delta is { } d) return (long)d.TotalMilliseconds;
+        if (ra.Date is { } when)
+        {
+            var ms = (when - DateTimeOffset.UtcNow).TotalMilliseconds;
+            return ms > 0 ? (long)ms : 0;
+        }
+        return null;
+    }
+
     // Performs the documented Claude Code refresh_token flow. Returns the new credential set
     // on success (already written back to disk), or null on ANY failure -- non-200 (incl. a
     // Cloudflare 403 / 429), malformed body, or thrown exception. Never throws to the caller,
@@ -170,6 +242,13 @@ public sealed class UsageService
                 // style payloads with no secret material; safe (and essential) to capture.
                 var errBody = await SafeReadBodyAsync(response);
                 _authLog.Log($"REFRESH FAILED -- response body: {errBody}");
+
+                // A 429 from the token endpoint is the self-lockout trap: enter a refresh
+                // cooldown so we stop re-arming the rate limit every poll. Other 4xx/5xx keep
+                // the existing one-attempt-per-cycle behavior (the poll-interval is the floor).
+                if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                    EnterRefreshCooldown(response);
+
                 // Log only the status code (e.g. 403 WAF, 429) -- never the body/tokens.
                 _logger.LogWarning(
                     "Token refresh failed: HTTP {Status}. Falling back to backoff; a manual " +
@@ -185,6 +264,9 @@ public sealed class UsageService
                 _logger.LogWarning("Token refresh response missing access_token; ignoring.");
                 return null;
             }
+
+            // The refresh HTTP call succeeded -- whatever rate-limit state we were in is over.
+            ClearRefreshCooldown("refresh succeeded");
 
             // Refresh tokens may ROTATE -- store whichever one comes back; keep the old one
             // only if the response omitted it entirely.
@@ -203,10 +285,10 @@ public sealed class UsageService
             }
             catch (Exception wex)
             {
-                // NOTE: the fresh access_token IS valid in memory, but the current code path
-                // discards it (rethrow -> outer catch -> null) because persistence failed.
-                _authLog.LogException("WRITE-BACK FAILED (valid fresh token NOT persisted; refresh treated as failure)", wex);
-                throw;
+                // The fresh access_token is VALID in memory -- a persistence failure must NOT
+                // throw it away. Use it for this poll anyway; it just won't survive a restart
+                // (and CC may briefly disagree on the rotated token until the next good write).
+                _authLog.LogException("WRITE-BACK FAILED (using in-memory fresh token for polling anyway; not persisted)", wex);
             }
 
             _logger.LogInformation("Token refreshed; credentials updated and CC kept in sync.");
