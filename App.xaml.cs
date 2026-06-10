@@ -116,11 +116,11 @@ public partial class App : Application
             _notifyIcon = new WinForms.NotifyIcon
             {
                 Icon = CreateTrayIcon(),
-                Visible = true,
                 Text = "Claude Usage",
                 ContextMenuStrip = menu,
             };
             _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
+            _notifyIcon.Visible = true;
             _trayIconAvailable = true;
         }
         catch
