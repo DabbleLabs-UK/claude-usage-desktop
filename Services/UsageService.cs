@@ -1,18 +1,74 @@
+using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeUsage.Models;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeUsage.Services;
 
 public sealed class UsageService
 {
+    // Official Claude Code CLI OAuth client id + the documented refresh endpoint.
+    private const string OAuthClientId   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+    private const string RefreshEndpoint = "https://console.anthropic.com/api/oauth/token";
+
+    // Proactively refresh when the access token is expired or within this window of expiry.
+    private const long RefreshSkewMs = 5 * 60 * 1000; // 5 minutes
+
     private static readonly HttpClient _http = new();
+    private readonly ILogger<UsageService> _logger;
+
+    public UsageService(ILogger<UsageService> logger) => _logger = logger;
+
+    private static string CredentialsPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".claude", ".credentials.json");
 
     public async Task<UsageData> FetchAsync()
     {
-        var token = await ReadTokenAsync();
+        var creds = await ReadCredentialsAsync();
 
+        // At most ONE refresh attempt per poll cycle (same burst-protection discipline as
+        // the poller's backoff). Proactive consumes the attempt; if it ran, reactive won't.
+        bool refreshAttempted = false;
+
+        // --- PROACTIVE refresh -------------------------------------------------------------
+        // If the token is already expired or about to expire, refresh BEFORE polling so the
+        // poll uses a fresh token. A failed refresh here is swallowed (returns null) and we
+        // fall through to poll with the existing token -- it may still work, or yield a 401
+        // that the poller turns into the backoff/auth card.
+        if (creds.RefreshToken is not null && IsExpiringSoon(creds.ExpiresAt))
+        {
+            refreshAttempted = true;
+            var refreshed = await TryRefreshAsync(creds.RefreshToken);
+            if (refreshed is not null) creds = refreshed;
+        }
+
+        try
+        {
+            return await PollUsageAsync(creds.AccessToken);
+        }
+        catch (HttpRequestException ex)
+            when (ex.StatusCode == HttpStatusCode.Unauthorized
+                  && !refreshAttempted
+                  && creds.RefreshToken is not null)
+        {
+            // --- REACTIVE refresh ----------------------------------------------------------
+            // The poll came back 401 and we have NOT already spent our refresh this cycle.
+            // Try exactly one refresh, then retry the poll once. If the refresh fails, or the
+            // retried poll still 401s, the exception propagates to the poller's backoff path.
+            _logger.LogWarning("Usage poll returned 401; attempting one token refresh.");
+            var refreshed = await TryRefreshAsync(creds.RefreshToken);
+            if (refreshed is null) throw;           // fall through to existing backoff/error card
+            return await PollUsageAsync(refreshed.AccessToken); // a second 401 → backoff
+        }
+    }
+
+    private static async Task<UsageData> PollUsageAsync(string token)
+    {
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.Add("anthropic-beta", "oauth-2025-04-20");
@@ -24,6 +80,133 @@ public sealed class UsageService
 
         var body = await response.Content.ReadAsStringAsync();
         return Parse(body);
+    }
+
+    // True iff the token is expired or within RefreshSkewMs of expiry. An unknown/zero
+    // expiry returns false -- we don't proactively refresh on a guess; the reactive 401
+    // path covers that case (and avoids hammering the refresh endpoint every cycle).
+    private static bool IsExpiringSoon(long expiresAtMs)
+    {
+        if (expiresAtMs <= 0) return false;
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return expiresAtMs - nowMs <= RefreshSkewMs;
+    }
+
+    // Performs the documented Claude Code refresh_token flow. Returns the new credential set
+    // on success (already written back to disk), or null on ANY failure -- non-200 (incl. a
+    // Cloudflare 403 / 429), malformed body, or thrown exception. Never throws to the caller,
+    // never loops, and never logs token material.
+    private async Task<Credentials?> TryRefreshAsync(string refreshToken)
+    {
+        try
+        {
+            var payload = new JsonObject
+            {
+                ["grant_type"]    = "refresh_token",
+                ["refresh_token"] = refreshToken,
+                ["client_id"]     = OAuthClientId,
+            };
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, RefreshEndpoint)
+            {
+                Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json"),
+            };
+            request.Headers.Add("User-Agent", "claude-code/2.1.0");
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            using var response = await _http.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                // Log only the status code (e.g. 403 WAF, 429) -- never the body/tokens.
+                _logger.LogWarning(
+                    "Token refresh failed: HTTP {Status}. Falling back to backoff; a manual " +
+                    "re-auth (run Claude Code) may be needed.", (int)response.StatusCode);
+                return null;
+            }
+
+            var body = await response.Content.ReadAsStringAsync();
+            var (access, refresh, expiresIn) = ParseRefreshResponse(body);
+            if (access is null)
+            {
+                _logger.LogWarning("Token refresh response missing access_token; ignoring.");
+                return null;
+            }
+
+            // Refresh tokens may ROTATE -- store whichever one comes back; keep the old one
+            // only if the response omitted it entirely.
+            var newRefresh   = refresh ?? refreshToken;
+            var newExpiresAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + expiresIn * 1000;
+
+            await WriteCredentialsAsync(access, newRefresh, newExpiresAt);
+            _logger.LogInformation("Token refreshed; credentials updated and CC kept in sync.");
+            return new Credentials(access, newRefresh, newExpiresAt);
+        }
+        catch (Exception ex)
+        {
+            // A refresh failure must NEVER crash the poller. Log the exception type only.
+            _logger.LogWarning("Token refresh threw {Type}; falling back to backoff.", ex.GetType().Name);
+            return null;
+        }
+    }
+
+    private static (string? Access, string? Refresh, long ExpiresIn) ParseRefreshResponse(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return (null, null, 3600);
+
+            string? access = root.TryGetProperty("access_token", out var a) && a.ValueKind == JsonValueKind.String
+                ? a.GetString() : null;
+            string? refresh = root.TryGetProperty("refresh_token", out var r) && r.ValueKind == JsonValueKind.String
+                ? r.GetString() : null;
+            // Default to 1h if the field is absent -- avoids a 0 expiry that would force a
+            // refresh on every subsequent cycle (i.e. hammering the endpoint).
+            long expiresIn = root.TryGetProperty("expires_in", out var e) && e.ValueKind == JsonValueKind.Number
+                ? e.GetInt64() : 3600;
+
+            return (access, refresh, expiresIn);
+        }
+        catch (JsonException)
+        {
+            return (null, null, 3600);
+        }
+    }
+
+    // Atomically write the rotated token set back to .credentials.json, updating ONLY the
+    // three fields and preserving every other field (scopes, subscriptionType, rateLimitTier,
+    // any unknown keys, and any other top-level objects) byte-for-byte via JsonNode. Writes to
+    // a temp file in the same directory, then move-with-overwrite so an interrupted write can
+    // never leave a half-written/corrupt credentials file in place.
+    private static async Task WriteCredentialsAsync(string accessToken, string refreshToken, long expiresAt)
+    {
+        var path = CredentialsPath;
+        var json = await File.ReadAllTextAsync(path);
+
+        if (JsonNode.Parse(json) is not JsonObject root)
+            throw new InvalidOperationException("Credentials file is not a JSON object.");
+        if (root["claudeAiOauth"] is not JsonObject oauth)
+            throw new InvalidOperationException("claudeAiOauth object missing from credentials file.");
+
+        oauth["accessToken"]  = accessToken;
+        oauth["refreshToken"] = refreshToken;
+        oauth["expiresAt"]    = expiresAt;
+
+        var updated = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+
+        var dir  = Path.GetDirectoryName(path)!;
+        var temp = Path.Combine(dir, $".credentials.{Guid.NewGuid():N}.tmp");
+        await File.WriteAllTextAsync(temp, updated);
+        try
+        {
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(temp); } catch { /* best effort temp cleanup */ }
+            throw;
+        }
     }
 
     // Generic, tolerant parse. We never deserialize into fixed records, so unknown
@@ -122,24 +305,26 @@ public sealed class UsageService
             ? v.GetDouble()
             : null;
 
-    private static async Task<string> ReadTokenAsync()
+    private static async Task<Credentials> ReadCredentialsAsync()
     {
-        var path = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".claude", ".credentials.json");
-
-        var json = await File.ReadAllTextAsync(path);
+        var json = await File.ReadAllTextAsync(CredentialsPath);
         var creds = JsonSerializer.Deserialize<CredentialsFile>(json);
-        return creds?.ClaudeAiOauth?.AccessToken
-            ?? throw new InvalidOperationException("Access token not found in credentials file.");
+        var oauth = creds?.ClaudeAiOauth
+            ?? throw new InvalidOperationException("claudeAiOauth not found in credentials file.");
+        if (oauth.AccessToken is null)
+            throw new InvalidOperationException("Access token not found in credentials file.");
+        return new Credentials(oauth.AccessToken, oauth.RefreshToken, oauth.ExpiresAt);
     }
 
     // --- credentials models ---
+
+    private sealed record Credentials(string AccessToken, string? RefreshToken, long ExpiresAt);
 
     private record CredentialsFile(
         [property: JsonPropertyName("claudeAiOauth")] OAuthCreds? ClaudeAiOauth);
 
     private record OAuthCreds(
-        [property: JsonPropertyName("accessToken")] string? AccessToken,
-        [property: JsonPropertyName("expiresAt")] long ExpiresAt);
+        [property: JsonPropertyName("accessToken")]  string? AccessToken,
+        [property: JsonPropertyName("refreshToken")] string? RefreshToken,
+        [property: JsonPropertyName("expiresAt")]    long ExpiresAt);
 }
