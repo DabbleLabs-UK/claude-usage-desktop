@@ -41,8 +41,7 @@ public partial class MainWindow : Window
 
         new AboutWindow(
             appVersion: GetAppVersion(),
-            tosUrl: "https://dabblelabs.uk/claude-usage-desktop/tos.html",
-            privacyUrl: "https://dabblelabs.uk/claude-usage-desktop/privacy.html",
+            appSlug: "claude-usage-desktop",
             panelBackground: Hex("#151526"),   // --surface
             textForeground: Hex("#dde1f0"),    // --text
             mutedForeground: Hex("#60688a"),   // --muted
