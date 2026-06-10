@@ -268,6 +268,39 @@
     }
     .update-banner a:hover { text-decoration: underline; }
 
+    /* Backoff status banner -- visible while polling is backed off */
+    .backoff-banner {
+      flex-shrink: 0;
+      background: #1e0e04;
+      border-bottom: 2px solid #7c3500;
+      padding: 8px 16px 9px;
+    }
+    .backoff-banner-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2px;
+    }
+    .backoff-banner-title {
+      font-size: 0.80rem;
+      font-weight: 700;
+      color: #fb923c;
+    }
+    .backoff-banner-fails {
+      font-size: 0.68rem;
+      color: var(--muted);
+    }
+    .backoff-banner-next {
+      font-size: 0.75rem;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+    .backoff-banner-mult {
+      font-size: 0.65rem;
+      color: var(--dim);
+    }
+
     /* Rounding-ambiguity warning: shown on weekly card only, late in period near the cap */
     .rounding-warning {
       font-size: 0.65rem;
@@ -549,6 +582,15 @@
   Update available: <a id="updateLink" href="#" target="_blank" rel="noopener noreferrer"></a> -- click to download
 </div>
 
+<div id="backoffBanner" class="backoff-banner hidden">
+  <div class="backoff-banner-head">
+    <span class="backoff-banner-title" id="backoffTitle">Rate-limited — backing off</span>
+    <span class="backoff-banner-fails" id="backoffFails"></span>
+  </div>
+  <div class="backoff-banner-next" id="backoffNext"></div>
+  <div class="backoff-banner-mult">Doubling each failure (&times;2) &mdash; interval resets on next success</div>
+</div>
+
 <main id="mainView">
   <div class="loading">Loading...</div>
 </main>
@@ -683,6 +725,7 @@
   let _openCardKey            = null;
   let _loadedPreferredAdapter = null;
   let _adapterCandidates      = [];
+  let _backoffState           = null;
 
   async function fetchInstanceId() {
     try {
@@ -997,6 +1040,51 @@
   }
 
   setInterval(() => { if (lastData) render(lastData); }, 60000);
+
+  // ---- Backoff status banner ----
+
+  function _backoffTypeLabel(t) {
+    if (t === 'rate_limit') return 'Rate-limited';
+    if (t === 'auth')       return 'Auth error';
+    return 'Error';
+  }
+
+  function _fmtBackoffCountdown(nextAttemptAt) {
+    const ms = new Date(nextAttemptAt) - Date.now();
+    if (ms <= 0) return 'retrying now…';
+    const totalSec = Math.ceil(ms / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return (m > 0 ? m + 'm ' : '') + s + 's';
+  }
+
+  function updateBackoffBanner() {
+    const banner = document.getElementById('backoffBanner');
+    if (!_backoffState) {
+      banner.classList.add('hidden');
+      return;
+    }
+    banner.classList.remove('hidden');
+    const typeStr = _backoffTypeLabel(_backoffState.errorType);
+    document.getElementById('backoffTitle').textContent = typeStr + ' — backing off';
+    const n = _backoffState.consecutiveFailures;
+    document.getElementById('backoffFails').textContent = n + ' consecutive failure' + (n === 1 ? '' : 's');
+    const countdown = _fmtBackoffCountdown(_backoffState.nextAttemptAt);
+    document.getElementById('backoffNext').textContent =
+      'Next attempt in ' + countdown + '  ·  interval ' + _backoffState.intervalSeconds + 's';
+  }
+
+  setInterval(function() { if (_backoffState) updateBackoffBanner(); }, 1000);
+
+  conn.on('backoffUpdated', function(info) {
+    _backoffState = info;
+    updateBackoffBanner();
+  });
+
+  fetch('/api/backoff')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) { _backoffState = d; updateBackoffBanner(); } })
+    .catch(function() {});
 
   // Tick every second to keep countdown elements current.
   // When a countdown transitions to "resetting...", trigger a full re-render so the

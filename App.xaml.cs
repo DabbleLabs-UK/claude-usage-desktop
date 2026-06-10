@@ -20,6 +20,7 @@ public partial class App : Application
 {
     private static readonly string InstanceId = Guid.NewGuid().ToString("N");
 
+    private static Mutex? _singleInstanceMutex;
     private IHost? _host;
     private WinForms.NotifyIcon? _notifyIcon;
     private MainWindow? _mainWindow;
@@ -32,6 +33,16 @@ public partial class App : Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // Single-instance guard: only one poller should ever hit the endpoint at a time.
+        _singleInstanceMutex = new Mutex(true, "Local\\ClaudeUsage_SingleInstance_v1", out bool createdNew);
+        if (!createdNew)
+        {
+            _singleInstanceMutex.Dispose();
+            _singleInstanceMutex = null;
+            Current.Shutdown();
+            return;
+        }
+
         base.OnStartup(e);
         WinForms.Application.EnableVisualStyles();
 
@@ -58,6 +69,8 @@ public partial class App : Application
             await _host.StopAsync(TimeSpan.FromSeconds(3));
             _host.Dispose();
         }
+        try { _singleInstanceMutex?.ReleaseMutex(); } catch { }
+        _singleInstanceMutex?.Dispose();
         base.OnExit(e);
     }
 
@@ -303,6 +316,9 @@ public partial class App : Application
             state.Current is { } data
                 ? Results.Ok(data)
                 : Results.NotFound(new { message = "No data yet." }));
+
+        app.MapGet("/api/backoff", (UsageState state) =>
+            Results.Ok(state.Backoff));
 
         app.MapGet("/api/settings", (SettingsService settings) =>
             Results.Ok(settings.Current with { StartWithWindows = settings.GetActualAutostart() }));

@@ -4,6 +4,14 @@ namespace ClaudeUsage.Models;
 // report utilization without a resets_at, and the API may omit it entirely.
 public record UsageWindow(double Utilization, DateTimeOffset? ResetsAt);
 
+// Active backoff state pushed to the UI while polling is throttled.
+// ErrorType: "rate_limit" | "auth" | "other"
+public record BackoffInfo(
+    string ErrorType,
+    int ConsecutiveFailures,
+    int IntervalSeconds,
+    DateTimeOffset NextAttemptAt);
+
 public record ExtraUsageData(
     double MonthlyLimit,   // display value (raw / 100)
     double UsedCredits,    // display value (raw / 100)
