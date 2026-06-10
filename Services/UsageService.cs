@@ -13,7 +13,7 @@ public sealed class UsageService
 {
     // Official Claude Code CLI OAuth client id + the documented refresh endpoint.
     private const string OAuthClientId   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-    private const string RefreshEndpoint = "https://console.anthropic.com/api/oauth/token";
+    private const string RefreshEndpoint = "https://platform.claude.com/v1/oauth/token";
 
     // Proactively refresh when the access token is expired or within this window of expiry.
     private const long RefreshSkewMs = 5 * 60 * 1000; // 5 minutes
