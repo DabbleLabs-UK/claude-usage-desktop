@@ -1065,6 +1065,11 @@
       return;
     }
     banner.classList.remove('hidden');
+    // If we still have no data, clear "Loading..." so the backoff banner is the sole indicator.
+    if (!lastData) {
+      const mv = document.getElementById('mainView');
+      if (mv && mv.querySelector('.loading')) mv.innerHTML = '';
+    }
     const typeStr = _backoffTypeLabel(_backoffState.errorType);
     document.getElementById('backoffTitle').textContent = typeStr + ' — backing off';
     const n = _backoffState.consecutiveFailures;
@@ -1075,6 +1080,13 @@
   }
 
   setInterval(function() { if (_backoffState) updateBackoffBanner(); }, 1000);
+
+  const conn = new signalR.HubConnectionBuilder()
+    .withUrl('/hub/usage')
+    // Extended retry schedule -- covers slow server restarts.
+    // Polling fallback (below) catches anything beyond this.
+    .withAutomaticReconnect([0, 2000, 5000, 10000, 15000, 20000, 30000, 30000, 30000])
+    .build();
 
   conn.on('backoffUpdated', function(info) {
     _backoffState = info;
@@ -1207,13 +1219,6 @@
     _checkToolbarOverflow();
   }
   window.closeDetail = closeDetail;
-
-  const conn = new signalR.HubConnectionBuilder()
-    .withUrl('/hub/usage')
-    // Extended retry schedule -- covers slow server restarts.
-    // Polling fallback (below) catches anything beyond this.
-    .withAutomaticReconnect([0, 2000, 5000, 10000, 15000, 20000, 30000, 30000, 30000])
-    .build();
 
   conn.on('usageUpdated', render);
 
