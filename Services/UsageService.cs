@@ -20,8 +20,13 @@ public sealed class UsageService
 
     private static readonly HttpClient _http = new();
     private readonly ILogger<UsageService> _logger;
+    private readonly AuthRefreshLog _authLog;
 
-    public UsageService(ILogger<UsageService> logger) => _logger = logger;
+    public UsageService(ILogger<UsageService> logger, AuthRefreshLog authLog)
+    {
+        _logger  = logger;
+        _authLog = authLog;
+    }
 
     private static string CredentialsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -40,16 +45,38 @@ public sealed class UsageService
         // poll uses a fresh token. A failed refresh here is swallowed (returns null) and we
         // fall through to poll with the existing token -- it may still work, or yield a 401
         // that the poller turns into the backoff/auth card.
+        var nowMs        = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var remainingMs  = creds.ExpiresAt - nowMs;
+        var hasRefresh   = creds.RefreshToken is not null;
+        var expiringSoon = IsExpiringSoon(creds.ExpiresAt);
+        _authLog.Log(
+            $"POLL proactive-check: expiresAt={creds.ExpiresAt} ({FormatMs(creds.ExpiresAt)}) " +
+            $"remaining={remainingMs}ms (~{remainingMs / 1000}s) skew={RefreshSkewMs}ms " +
+            $"refreshTokenPresent={hasRefresh} expiringSoon={expiringSoon} " +
+            $"=> proactiveTrigger={hasRefresh && expiringSoon}");
+
         if (creds.RefreshToken is not null && IsExpiringSoon(creds.ExpiresAt))
         {
             refreshAttempted = true;
+            _authLog.Log("PROACTIVE refresh firing (token expired or within skew window).");
             var refreshed = await TryRefreshAsync(creds.RefreshToken);
-            if (refreshed is not null) creds = refreshed;
+            if (refreshed is not null)
+            {
+                creds = refreshed;
+                _authLog.Log("PROACTIVE refresh succeeded; polling with fresh token.");
+            }
+            else
+            {
+                _authLog.Log("PROACTIVE refresh failed; polling with existing (likely expired) token.");
+            }
         }
 
         try
         {
-            return await PollUsageAsync(creds.AccessToken);
+            var data = await PollUsageAsync(creds.AccessToken);
+            if (refreshAttempted)
+                _authLog.Log("POLL ok after refresh this cycle -- recovery confirmed.");
+            return data;
         }
         catch (HttpRequestException ex)
             when (ex.StatusCode == HttpStatusCode.Unauthorized
@@ -60,10 +87,26 @@ public sealed class UsageService
             // The poll came back 401 and we have NOT already spent our refresh this cycle.
             // Try exactly one refresh, then retry the poll once. If the refresh fails, or the
             // retried poll still 401s, the exception propagates to the poller's backoff path.
+            _authLog.Log("REACTIVE: poll 401, gate open (no refresh this cycle), refresh token present => attempting one reactive refresh.");
             _logger.LogWarning("Usage poll returned 401; attempting one token refresh.");
             var refreshed = await TryRefreshAsync(creds.RefreshToken);
-            if (refreshed is null) throw;           // fall through to existing backoff/error card
+            if (refreshed is null)
+            {
+                _authLog.Log("REACTIVE refresh failed; propagating 401 to poller backoff.");
+                throw;                              // fall through to existing backoff/error card
+            }
+            _authLog.Log("REACTIVE refresh succeeded; retrying poll once with fresh token.");
             return await PollUsageAsync(refreshed.AccessToken); // a second 401 → backoff
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            // 401 that the reactive path above did NOT handle: either the refresh gate was
+            // already spent this cycle (proactive ran) or no refresh token exists. This is
+            // the exact state that leaves the auth-error card stuck -- record why no retry.
+            _authLog.Log(
+                $"POLL 401 NOT retried: refreshAttempted={refreshAttempted} " +
+                $"refreshTokenPresent={creds.RefreshToken is not null}; propagating to poller backoff.");
+            throw;
         }
     }
 
@@ -100,6 +143,11 @@ public sealed class UsageService
     {
         try
         {
+            _authLog.Log(
+                $"REFRESH POST {RefreshEndpoint} content-type=application/json " +
+                $"grant_type=refresh_token client_id={OAuthClientId} " +
+                $"refresh_token({Preview(refreshToken)}).");
+
             var payload = new JsonObject
             {
                 ["grant_type"]    = "refresh_token",
@@ -115,8 +163,13 @@ public sealed class UsageService
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             using var response = await _http.SendAsync(request);
+            _authLog.Log($"REFRESH response: HTTP {(int)response.StatusCode} {response.StatusCode}.");
             if (!response.IsSuccessStatusCode)
             {
+                // Body ON FAILURE ONLY -- token-endpoint errors are {"error":"invalid_grant"}
+                // style payloads with no secret material; safe (and essential) to capture.
+                var errBody = await SafeReadBodyAsync(response);
+                _authLog.Log($"REFRESH FAILED -- response body: {errBody}");
                 // Log only the status code (e.g. 403 WAF, 429) -- never the body/tokens.
                 _logger.LogWarning(
                     "Token refresh failed: HTTP {Status}. Falling back to backoff; a manual " +
@@ -128,24 +181,68 @@ public sealed class UsageService
             var (access, refresh, expiresIn) = ParseRefreshResponse(body);
             if (access is null)
             {
+                _authLog.Log("REFRESH parse: 200 OK but access_token MISSING/blank in body; treating as failure.");
                 _logger.LogWarning("Token refresh response missing access_token; ignoring.");
                 return null;
             }
 
             // Refresh tokens may ROTATE -- store whichever one comes back; keep the old one
             // only if the response omitted it entirely.
+            var rotated      = refresh is not null && refresh != refreshToken;
             var newRefresh   = refresh ?? refreshToken;
             var newExpiresAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + expiresIn * 1000;
+            _authLog.Log(
+                $"REFRESH parse ok: access_token({Preview(access)}) expires_in={expiresIn}s " +
+                $"newExpiresAt={newExpiresAt} ({FormatMs(newExpiresAt)}) " +
+                $"refreshTokenRotated={rotated} newRefresh({Preview(newRefresh)}).");
 
-            await WriteCredentialsAsync(access, newRefresh, newExpiresAt);
+            try
+            {
+                await WriteCredentialsAsync(access, newRefresh, newExpiresAt);
+                _authLog.Log("WRITE-BACK ok: .credentials.json atomically updated with rotated token set.");
+            }
+            catch (Exception wex)
+            {
+                // NOTE: the fresh access_token IS valid in memory, but the current code path
+                // discards it (rethrow -> outer catch -> null) because persistence failed.
+                _authLog.LogException("WRITE-BACK FAILED (valid fresh token NOT persisted; refresh treated as failure)", wex);
+                throw;
+            }
+
             _logger.LogInformation("Token refreshed; credentials updated and CC kept in sync.");
             return new Credentials(access, newRefresh, newExpiresAt);
         }
         catch (Exception ex)
         {
             // A refresh failure must NEVER crash the poller. Log the exception type only.
+            _authLog.LogException("REFRESH threw (falling back to backoff)", ex);
             _logger.LogWarning("Token refresh threw {Type}; falling back to backoff.", ex.GetType().Name);
             return null;
+        }
+    }
+
+    // Reduces a secret to a non-reversible preview for logging -- NEVER the token itself.
+    // "first 8 chars at most" per the instrumentation spec.
+    private static string Preview(string? secret) =>
+        secret is null ? "<null>"
+        : $"len={secret.Length} first8={secret[..Math.Min(8, secret.Length)]}";
+
+    // Renders a unix-ms instant as a readable UTC stamp; "unset" for a zero/absent expiry.
+    private static string FormatMs(long unixMs) =>
+        unixMs <= 0 ? "unset"
+        : DateTimeOffset.FromUnixTimeMilliseconds(unixMs).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss") + "Z";
+
+    // Reads a (failure) response body defensively for logging: bounded length, never throws.
+    private static async Task<string> SafeReadBodyAsync(HttpResponseMessage resp)
+    {
+        try
+        {
+            var s = await resp.Content.ReadAsStringAsync();
+            return s.Length > 2000 ? s[..2000] + "...(truncated)" : s;
+        }
+        catch (Exception ex)
+        {
+            return $"<body read failed: {ex.GetType().Name}>";
         }
     }
 

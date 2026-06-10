@@ -311,6 +311,7 @@ public partial class App : Application
         builder.Services.AddSingleton(_firewallService);
         builder.Services.AddSingleton<UsageState>();
         builder.Services.AddSingleton<UsageLog>();
+        builder.Services.AddSingleton<AuthRefreshLog>();
         builder.Services.AddSingleton<UsageService>();
         builder.Services.AddSingleton<UsagePoller>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<UsagePoller>());
