@@ -134,23 +134,12 @@ public partial class App : Application
 
     private static Drawing.Icon CreateTrayIcon()
     {
-        // Primary: read the Win32 PE icon resources from the running exe — the same
-        // icon that the taskbar and window title-bar show (set by <ApplicationIcon>).
-        // This works in self-contained single-file publish because ProcessPath points
-        // to the bundled exe, which carries the PE icon resources in its header.
-        try
-        {
-            var exePath = Environment.ProcessPath;
-            if (exePath is not null)
-            {
-                var icon = Drawing.Icon.ExtractAssociatedIcon(exePath);
-                if (icon is not null) return icon;
-            }
-        }
-        catch { }
-
-        // Fallback: load from the embedded .NET resource — search by suffix so the
-        // exact managed resource name doesn't need to be hardcoded.
+        // Primary: load from the embedded .NET resource. This is reliable in
+        // single-file publish — the assembly is bundled in the exe and
+        // GetManifestResourceStream works correctly from the bundle.
+        // ExtractAssociatedIcon is NOT used as primary because it delegates to
+        // SHGetFileInfo/the shell image list and can return a handle that the
+        // shell owns and may invalidate, producing a visible-but-blank tray slot.
         try
         {
             var asm = typeof(App).Assembly;
@@ -158,9 +147,25 @@ public partial class App : Application
                 n => n.EndsWith("logo_icon.ico", StringComparison.OrdinalIgnoreCase));
             if (name is not null)
             {
-                using var stream = asm.GetManifestResourceStream(name);
-                if (stream is not null)
-                    return new Drawing.Icon(stream);
+                using var raw = asm.GetManifestResourceStream(name)!;
+                // Copy into a fresh MemoryStream so the Icon owns its backing bytes
+                // independently of the resource stream's lifetime.
+                var ms = new MemoryStream();
+                raw.CopyTo(ms);
+                ms.Position = 0;
+                return new Drawing.Icon(ms);
+            }
+        }
+        catch { }
+
+        // Fallback: read the Win32 PE icon resources from the running exe.
+        try
+        {
+            var exePath = Environment.ProcessPath;
+            if (exePath is not null)
+            {
+                var icon = Drawing.Icon.ExtractAssociatedIcon(exePath);
+                if (icon is not null) return icon;
             }
         }
         catch { }
