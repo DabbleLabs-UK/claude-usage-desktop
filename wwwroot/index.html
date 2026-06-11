@@ -84,6 +84,11 @@
     }
     .stale.show { display: inline; }
 
+    #mainView.stale-mode {
+      filter: grayscale(35%) opacity(0.68);
+      transition: filter 0.4s, opacity 0.4s;
+    }
+
     .gear-btn {
       background: none;
       border: none;
@@ -322,6 +327,11 @@
     .backoff-banner-mult {
       font-size: 0.65rem;
       color: var(--dim);
+    }
+    .backoff-stale-info {
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-top: 3px;
     }
 
     /* Rounding-ambiguity warning: shown on weekly card only, late in period near the cap */
@@ -765,6 +775,7 @@
   </div>
   <div class="backoff-banner-next" id="backoffNext"></div>
   <div class="backoff-banner-mult">Doubling each failure (&times;2) &mdash; interval resets on next success</div>
+  <div class="backoff-stale-info hidden" id="backoffStaleInfo"></div>
 </div>
 
 <main id="mainView">
@@ -951,6 +962,7 @@
   let _loadedPreferredAdapter = null;
   let _adapterCandidates      = [];
   let _backoffState           = null;
+  let _lastGoodData           = null;
 
   async function fetchInstanceId() {
     try {
@@ -1216,6 +1228,8 @@
 
   function render(data) {
     lastData = data;
+    if (data && !data.isStale && data.windows && Object.keys(data.windows).length > 0)
+      _lastGoodData = data;
     const windows = (data && data.windows) || {};
     _cardDataMap = {};
     let html = '';
@@ -1266,6 +1280,7 @@
       }
     }
     _checkToolbarOverflow();
+    document.getElementById('mainView').classList.toggle('stale-mode', !!(_backoffState && _lastGoodData));
   }
 
   setInterval(() => { if (lastData) render(lastData); }, 60000);
@@ -1289,14 +1304,28 @@
 
   function updateBackoffBanner() {
     const banner = document.getElementById('backoffBanner');
+    const si = document.getElementById('backoffStaleInfo');
+    const mv = document.getElementById('mainView');
     if (!_backoffState) {
       banner.classList.add('hidden');
+      if (si) si.classList.add('hidden');
+      if (mv) mv.classList.remove('stale-mode');
       return;
     }
     banner.classList.remove('hidden');
-    // If we still have no data, clear "Loading..." so the backoff banner is the sole indicator.
-    if (!lastData) {
-      const mv = document.getElementById('mainView');
+    // If we have cached good data and the view is blank or still loading, render it dimmed.
+    if (_lastGoodData && mv && (!lastData || mv.querySelector('.loading'))) {
+      render(_lastGoodData);
+    }
+    if (_lastGoodData && mv) {
+      mv.classList.add('stale-mode');
+      if (si) {
+        si.textContent = 'stale — last updated ' +
+          new Date(_lastGoodData.fetchedAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+        si.classList.remove('hidden');
+      }
+    } else if (!lastData) {
+      // No cache at all — clear loading so the backoff banner is the sole indicator.
       if (mv && mv.querySelector('.loading')) mv.innerHTML = '';
     }
     const typeStr = _backoffTypeLabel(_backoffState.errorType);
@@ -1305,7 +1334,7 @@
     document.getElementById('backoffFails').textContent = n + ' consecutive failure' + (n === 1 ? '' : 's');
     const countdown = _fmtBackoffCountdown(_backoffState.nextAttemptAt);
     document.getElementById('backoffNext').textContent =
-      'Next attempt in ' + countdown + '  ·  interval ' + _backoffState.intervalSeconds + 's';
+      'Next attempt in ' + countdown + '  \xb7  interval ' + _backoffState.intervalSeconds + 's';
   }
 
   setInterval(function() { if (_backoffState) updateBackoffBanner(); }, 1000);

@@ -320,7 +320,17 @@ public partial class App : Application
 
         app.UseCors();
         app.UseDefaultFiles();
-        app.UseStaticFiles();
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            OnPrepareResponse = ctx =>
+            {
+                if (ctx.File.Name.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Context.Response.Headers["Cache-Control"] = "no-cache, must-revalidate";
+                    ctx.Context.Response.Headers["Pragma"] = "no-cache";
+                }
+            }
+        });
         app.MapHub<UsageHub>("/hub/usage");
 
         app.MapGet("/api/usage", (UsageState state) =>
