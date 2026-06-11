@@ -84,6 +84,19 @@
     }
     .stale.show { display: inline; }
 
+    .reconnecting-el {
+      display: none;
+      font-size: 0.62rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      background: #1e3a5f;
+      color: #93c5fd;
+      padding: 1px 7px;
+      border-radius: 999px;
+    }
+    .reconnecting-el.show { display: inline; }
+
     #mainView.stale-mode {
       filter: grayscale(35%) opacity(0.68);
       transition: filter 0.4s, opacity 0.4s;
@@ -752,7 +765,6 @@
     .legend-item { display: flex; align-items: center; gap: 6px; }
     .legend-swatch { width: 18px; height: 0; border-radius: 2px; }
     .legend-swatch.session { border-top: 3px solid var(--accent); }
-    .legend-swatch.week    { border-top: 2px dashed var(--dim); }
 
     .chart-note {
       font-size: 0.7rem;
@@ -901,11 +913,11 @@
     <button class="chip" data-range="30d" onclick="setStatsRange('30d')">30d</button>
   </div>
   <div class="chart-card">
-    <div class="chart-title">Cumulative % consumed</div>
+    <div class="chart-title">Cumulative usage (normalised)</div>
     <div id="statsChart" class="chart-area"></div>
     <div class="chart-legend">
       <span class="legend-item"><span class="legend-swatch session"></span>Session</span>
-      <span class="legend-item"><span class="legend-swatch week"></span>Week</span>
+      <span class="legend-item"><svg width="22" height="6" style="display:block;flex-shrink:0"><line x1="0" y1="3" x2="22" y2="3" stroke="#2dd4bf" stroke-width="2" stroke-dasharray="3,2"/></svg>Week</span>
     </div>
   </div>
 </div>
@@ -915,6 +927,7 @@
     <div class="meta-text">
       <span class="updated" id="updatedEl">--</span>
       <span class="stale" id="staleEl">Stale</span>
+      <span class="reconnecting-el" id="reconnectingEl">Reconnecting&#x2026;</span>
     </div>
   </div>
   <button class="gear-btn" onclick="openStats()" title="Stats">
@@ -1491,8 +1504,13 @@
   // different instance id, regardless of whether SignalR managed to
   // reconnect via its own retry cycle.
 
+  function _setReconnecting(active) {
+    document.getElementById('reconnectingEl').classList.toggle('show', active);
+  }
+
   function startReconnectPolling() {
     if (_reconnectPollTimer !== null) return; // already polling
+    _setReconnecting(true);
     console.log('[CU] Disconnected -- polling /api/instance every 2.5s');
     _reconnectPollTimer = setInterval(async () => {
       const newId = await fetchInstanceId();
@@ -1519,6 +1537,11 @@
       console.log('[CU] Restarting SignalR manually...');
       await conn.start();
       console.log('[CU] SignalR manual restart OK');
+      _setReconnecting(false);
+      fetch('/api/usage')
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) render(d); })
+        .catch(function() {});
     } catch (e) {
       console.warn('[CU] Manual restart failed, retrying in 3s', e);
       setTimeout(trySignalRRestart, 3000);
@@ -1527,11 +1550,13 @@
 
   conn.onreconnecting(err => {
     console.log('[CU] SignalR reconnecting...', err ? err.message : '(no error)');
+    _setReconnecting(true);
     startReconnectPolling(); // start polling now; onreconnected will cancel it if SignalR wins
   });
 
   conn.onreconnected(async connectionId => {
     console.log('[CU] SignalR reconnected (connectionId=' + connectionId + ')');
+    _setReconnecting(false);
     if (_reconnectPollTimer !== null) { clearInterval(_reconnectPollTimer); _reconnectPollTimer = null; }
     const newId = await fetchInstanceId();
     console.log('[CU] Instance id check: stored=' + _instanceId + ' live=' + newId);
@@ -1541,7 +1566,11 @@
       return;
     }
     if (newId) _instanceId = newId;
-    console.log('[CU] Same instance id -- no reload needed');
+    console.log('[CU] Same instance id -- fetching current usage');
+    fetch('/api/usage')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) render(d); })
+      .catch(function() {});
   });
 
   conn.onclose(err => {
@@ -1700,16 +1729,19 @@
     _checkToolbarOverflow();
   }
 
-  // Hand-rolled SVG line chart: two cumulative series (session solid, week dashed/lighter)
-  // on a shared y-axis. y max = the larger series' cumulative total in range (auto-fit,
-  // may exceed 100%). x domain = the full selected range [now-span, now]. No smoothing --
-  // points are joined with straight segments so the steppy integer-% transitions show.
+  // Hand-rolled SVG line chart: two cumulative series (session solid, week dashed/lighter).
+  // Dual independent axes: left = Session (accent), right = Week (dim). Each axis is scaled
+  // to its own exact window max (latest value; cumulative is monotonic) so both lines reach
+  // the top of the plot. Tick labels show real cumulative % values. x domain = [now-span, now].
+  // Step-after rendering: each point's value holds flat until the next point.
   function renderStatsChart(data, range) {
-    const W = 360, H = 200;
-    const padL = 40, padR = 12, padT = 12, padB = 24;
+    const W = 380, H = 200;
+    const padL = 40, padR = 32, padT = 12, padB = 24;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
     const axis = 'var(--muted)';
+    const sessColor = 'var(--accent)';
+    const weekColor = '#2dd4bf';
     const grid = 'rgba(255,255,255,0.07)';
 
     const now    = Date.now();
@@ -1723,15 +1755,17 @@
     // Sparse/empty: too few logged points to draw a line on either series.
     const sparse = session.length < 2 && week.length < 2;
 
-    const sTot = session.length ? session[session.length - 1].v : 0;
-    const wTot = week.length    ? week[week.length - 1].v       : 0;
-    let yTop = Math.max(sTot, wTot);
-    if (!(yTop > 0)) yTop = 10; // flat / no data -> keep the axis sane
+    // Exact max in the window (cumulative is monotonic so last value = max).
+    // Guard divide-by-zero: series with 0 usage draws flat at bottom, axis labelled 0.
+    const sMax = session.length ? session[session.length - 1].v : 0;
+    const wMax = week.length    ? week[week.length - 1].v       : 0;
 
-    const x = ms => padL + ((ms - tMin) / spanMs) * plotW;
-    const y = v  => padT + plotH - (Math.min(v, yTop) / yTop) * plotH;
+    const fmtTick = function(v) { return v % 1 === 0 ? v.toFixed(0) : v.toFixed(1); };
 
-    const fmtV = n => (n % 1 === 0 ? n.toFixed(0) : n.toFixed(1));
+    const x  = ms => padL + ((ms - tMin) / spanMs) * plotW;
+    const yS = v  => padT + plotH - (sMax > 0 ? v / sMax : 0) * plotH;
+    const yW = v  => padT + plotH - (wMax > 0 ? v / wMax : 0) * plotH;
+
     const fmtT = ms => {
       const d = new Date(ms);
       return spanMs <= 86400000
@@ -1739,13 +1773,21 @@
         : (d.getMonth() + 1) + '/' + d.getDate();
     };
 
+    // Three gridlines at 0 / max/2 / max of each axis.
+    // Left ticks label Session's real % values; right ticks label Week's real % values.
     let g = '';
     [0, 0.5, 1].forEach(function(f) {
       const yy = padT + plotH - f * plotH;
       g += '<line x1="' + padL + '" y1="' + yy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + yy.toFixed(1)
-         + '" stroke="' + grid + '" stroke-width="1"/>'
-         + '<text x="' + (padL - 5) + '" y="' + (yy + 3).toFixed(1) + '" text-anchor="end" fill="' + axis
-         + '" font-size="8" font-family="system-ui,sans-serif">' + fmtV(yTop * f) + '</text>';
+         + '" stroke="' + grid + '" stroke-width="1"/>';
+      g += '<line x1="' + (padL - 4) + '" y1="' + yy.toFixed(1) + '" x2="' + padL + '" y2="' + yy.toFixed(1)
+         + '" stroke="' + sessColor + '" stroke-width="1"/>';
+      g += '<text x="' + (padL - 6) + '" y="' + (yy + 3).toFixed(1) + '" text-anchor="end" fill="' + sessColor
+         + '" font-size="8" font-family="system-ui,sans-serif">' + fmtTick(f * sMax) + '</text>';
+      g += '<line x1="' + (W - padR) + '" y1="' + yy.toFixed(1) + '" x2="' + (W - padR + 4) + '" y2="' + yy.toFixed(1)
+         + '" stroke="' + weekColor + '" stroke-width="1"/>';
+      g += '<text x="' + (W - padR + 6) + '" y="' + (yy + 3).toFixed(1) + '" text-anchor="start" fill="' + weekColor
+         + '" font-size="8" font-family="system-ui,sans-serif">' + fmtTick(f * wMax) + '</text>';
     });
 
     let xl = '';
@@ -1756,26 +1798,39 @@
           + '" font-size="8" font-family="system-ui,sans-serif">' + fmtT(tMin + f * spanMs) + '</text>';
     });
 
-    const poly = pts => pts.map(p => x(p.ms).toFixed(1) + ',' + y(p.v).toFixed(1)).join(' ');
+    // Step-after interpolation using each series' own normalised y-scale.
+    const stepPoly = (pts, yFn) => {
+      if (!pts.length) return '';
+      const out = [x(pts[0].ms).toFixed(1) + ',' + yFn(pts[0].v).toFixed(1)];
+      for (let i = 1; i < pts.length; i++) {
+        out.push(x(pts[i].ms).toFixed(1) + ',' + yFn(pts[i - 1].v).toFixed(1));
+        out.push(x(pts[i].ms).toFixed(1) + ',' + yFn(pts[i].v).toFixed(1));
+      }
+      return out.join(' ');
+    };
     let series = '';
     if (!sparse) {
       if (week.length >= 2)
-        series += '<polyline fill="none" stroke="var(--dim)" stroke-width="1.5" stroke-dasharray="4,3"'
-                + ' stroke-linejoin="round" points="' + poly(week) + '"/>';
+        series += '<polyline fill="none" stroke="' + weekColor + '" stroke-width="1.5" stroke-dasharray="4,3"'
+                + ' stroke-linejoin="round" points="' + stepPoly(week, yW) + '"/>';
       if (session.length >= 2)
         series += '<polyline fill="none" stroke="var(--accent)" stroke-width="2"'
-                + ' stroke-linejoin="round" points="' + poly(session) + '"/>';
+                + ' stroke-linejoin="round" points="' + stepPoly(session, yS) + '"/>';
     }
 
     const frame = '<rect x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + plotH
                 + '" fill="none" stroke="var(--border)" stroke-width="1"/>';
+    const leftAxisLine  = '<line x1="' + padL + '" y1="' + padT + '" x2="' + padL + '" y2="' + (padT + plotH)
+                        + '" stroke="' + sessColor + '" stroke-width="1"/>';
+    const rightAxisLine = '<line x1="' + (W - padR) + '" y1="' + padT + '" x2="' + (W - padR) + '" y2="' + (padT + plotH)
+                        + '" stroke="' + weekColor + '" stroke-width="1"/>';
     const empty = sparse
       ? '<text x="' + (padL + plotW / 2) + '" y="' + (padT + plotH / 2) + '" text-anchor="middle" fill="' + axis
         + '" font-size="10" font-family="system-ui,sans-serif">Collecting data — check back soon</text>'
       : '';
 
     return '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">'
-         + g + frame + series + xl + empty + '</svg>';
+         + g + frame + leftAxisLine + rightAxisLine + series + xl + empty + '</svg>';
   }
 
   // ---- Settings ----

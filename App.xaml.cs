@@ -213,13 +213,20 @@ public partial class App : Application
     private static readonly string[] VirtualAdapterKeywords =
     [
         "VirtualBox", "VMware", "Hyper-V", "vEthernet", "WSL",
-        "Bluetooth", "Loopback", "TAP", "Virtual"
+        "Bluetooth", "Loopback", "TAP", "Virtual", "RNDIS", "Remote NDIS"
     ];
 
-    private static bool IsVirtualAdapter(NetworkInterface ni) =>
-        VirtualAdapterKeywords.Any(kw =>
-            ni.Description.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-            ni.Name.Contains(kw, StringComparison.OrdinalIgnoreCase));
+    private static bool IsVirtualAdapter(NetworkInterface ni, string? ip = null)
+    {
+        if (VirtualAdapterKeywords.Any(kw =>
+                ni.Description.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
+                ni.Name.Contains(kw, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        // VirtualBox host-only subnet — belt-and-suspenders for adapters without "VirtualBox" in name
+        if (ip is not null && ip.StartsWith("192.168.56."))
+            return true;
+        return false;
+    }
 
     private static bool HasIpv4Gateway(NetworkInterface ni) =>
         ni.GetIPProperties().GatewayAddresses
@@ -246,7 +253,7 @@ public partial class App : Application
             .ThenByDescending(t => HasIpv4Gateway(t.ni))
             .ThenByDescending(t => t.ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211
                                 || t.ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet)
-            .Select(t => (t.ni.Name, t.ip!, IsVirtual: IsVirtualAdapter(t.ni)))
+            .Select(t => (t.ni.Name, t.ip!, IsVirtual: IsVirtualAdapter(t.ni, t.ip)))
             .ToList();
     }
 
