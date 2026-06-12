@@ -5,7 +5,9 @@ namespace ClaudeUsage.Models;
 public record UsageWindow(double Utilization, DateTimeOffset? ResetsAt);
 
 // Active backoff state pushed to the UI while polling is throttled.
-// ErrorType: "rate_limit" | "auth" | "other"
+// ErrorType: "rate_limit" | "auth" | "other" | "refresh_rate_limited"
+//   "refresh_rate_limited" is a calm waiting state (not a fail-ramp): the token endpoint is
+//   rate-limiting our own refresh, so the app is waiting to adopt a host `claude` disk refresh.
 public record BackoffInfo(
     string ErrorType,
     int ConsecutiveFailures,

@@ -30,7 +30,9 @@ public partial class MainWindow : Window
         webView.CoreWebView2.NewWindowRequested += OnNewWindowRequested;
 
         var port = ((App)Application.Current).SettingsService.Current.ServerPort;
-        webView.Source = new Uri($"http://localhost:{port}/");
+        var vx = typeof(MainWindow).Assembly.GetName().Version;
+        var ver = vx is null ? "0" : $"{vx.Major}.{vx.Minor}.{vx.Build}";
+        webView.Source = new Uri($"http://localhost:{port}/?v={ver}");
     }
 
     private void OnNewWindowRequested(object? sender, Microsoft.Web.WebView2.Core.CoreWebView2NewWindowRequestedEventArgs e)

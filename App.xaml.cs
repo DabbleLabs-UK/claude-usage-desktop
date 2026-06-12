@@ -326,7 +326,30 @@ public partial class App : Application
         var app = builder.Build();
 
         app.UseCors();
-        app.UseDefaultFiles();
+
+        var av = typeof(App).Assembly.GetName().Version;
+        var assetVer = av is null ? "0" : $"{av.Major}.{av.Minor}.{av.Build}";
+        var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+
+        // Intercept / and /index.html before static-file middleware; inject ?v=VERSION into
+        // local asset URLs so a new build busts sub-resource cache regardless of page URL.
+        // Replaces UseDefaultFiles() — the root path is served directly here.
+        app.Use(async (ctx, next) =>
+        {
+            var path = ctx.Request.Path.Value ?? "";
+            if (path == "/" || string.Equals(path, "/index.html", StringComparison.OrdinalIgnoreCase))
+            {
+                var html = await File.ReadAllTextAsync(Path.Combine(wwwrootPath, "index.html"));
+                html = html.Replace("\"logo_dabblelabs.png\"", $"\"logo_dabblelabs.png?v={assetVer}\"");
+                ctx.Response.ContentType = "text/html; charset=utf-8";
+                ctx.Response.Headers["Cache-Control"] = "no-cache, must-revalidate";
+                ctx.Response.Headers["Pragma"] = "no-cache";
+                await ctx.Response.WriteAsync(html);
+                return;
+            }
+            await next(ctx);
+        });
+
         app.UseStaticFiles(new StaticFileOptions
         {
             OnPrepareResponse = ctx =>

@@ -44,6 +44,21 @@ public sealed class UsagePoller : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Seed last-known usage from the persisted log so a relaunch shows the previous values
+        // (dimmed, marked stale) immediately -- instead of a blank page -- until the first poll
+        // succeeds. If that first poll fails (e.g. overnight auth/backoff), the seed keeps the
+        // UI populated; a success overwrites it with fresh, non-stale data.
+        if (_state.Current is null)
+        {
+            var seed = _log.ReadLastSample();
+            if (seed is not null)
+            {
+                _state.Update(seed with { IsStale = true });
+                _logger.LogInformation("Seeded last-known usage from persisted log (stale; fetchedAt={At}).",
+                    seed.FetchedAt);
+            }
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             await PollAsync(stoppingToken);
@@ -86,6 +101,19 @@ public sealed class UsagePoller : BackgroundService
                 data.Windows.GetValueOrDefault("five_hour")?.Utilization,
                 data.Windows.GetValueOrDefault("seven_day")?.Utilization,
                 data.Windows.Count);
+        }
+        catch (RefreshRateLimitedException ex)
+        {
+            // Own token refresh is suppressed by the sticky 429 cooldown and disk had nothing
+            // fresher to adopt. This is NOT an ordinary auth failure: we are deliberately not
+            // poking the rate-limited token endpoint and are waiting for the host `claude` to
+            // refresh on disk (the primary recovery path). Do NOT ramp the poll backoff -- keep
+            // the base cadence so each cycle re-checks disk-adoption and recovers promptly.
+            _logger.LogWarning("Token endpoint rate-limited; own refresh suppressed until {Until}. Polling continues at base cadence to await host disk refresh.", ex.SuppressedUntilMs);
+            _state.MarkStale();
+            await ApplyRefreshRateLimitedAsync(ct);
+            if (_state.Current is { } stale)
+                await _hub.Clients.All.SendAsync("usageUpdated", stale, ct);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
         {
@@ -133,5 +161,29 @@ public sealed class UsagePoller : BackgroundService
 
         _logger.LogInformation("Backoff: interval={Interval}s next={Next}",
             _currentInterval, backoff.NextAttemptAt);
+    }
+
+    // Surfaces the "token endpoint rate-limited -- waiting on host refresh" state WITHOUT ramping
+    // the poll interval. Unlike ApplyBackoffAsync this holds the cadence at base so every cycle
+    // promptly re-checks disk-adoption (the primary recovery path); the next poll, not a network
+    // refresh, is what recovers us once the host writes a fresher token. The banner message comes
+    // from the "refresh_rate_limited" errorType -- the frontend keeps it calm (no ramp/×2 noise).
+    private async Task ApplyRefreshRateLimitedAsync(CancellationToken ct)
+    {
+        _currentInterval = BaseIntervalSec;   // no exponential ramp; keep re-checking disk often
+
+        var info = new BackoffInfo(
+            "refresh_rate_limited",
+            _failureCount,                    // not incremented: this is a waiting state, not a fail-ramp
+            _currentInterval,
+            DateTimeOffset.UtcNow.AddSeconds(_currentInterval));
+
+        _state.SetBackoff(info);
+
+        try
+        {
+            await _hub.Clients.All.SendAsync("backoffUpdated", info, ct);
+        }
+        catch (OperationCanceledException) { }
     }
 }

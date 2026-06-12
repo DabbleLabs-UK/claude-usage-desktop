@@ -20,9 +20,12 @@ public sealed class UsageService
 
     // Refresh-specific cooldown after a 429 from the TOKEN endpoint. Without this the poller
     // re-fires a proactive refresh every cycle once the token is expired; each attempt resets
-    // the endpoint's rate-limit clock, so the app locks ITSELF out indefinitely. The duration
-    // policy (Retry-After, else exponential ramp) lives in RefreshCooldownPolicy. During
-    // cooldown NO refresh (proactive or reactive) may fire.
+    // the endpoint's STICKY rate-limit clock, so the app locks ITSELF out indefinitely. The
+    // duration policy (Retry-After, else a multi-hour sticky ramp) lives in RefreshCooldownPolicy.
+    // During cooldown NO own network refresh (proactive or reactive) may fire -- but DISK-ADOPTION
+    // (TryAdoptFresherDiskTokenAsync, a local file read) is NEVER gated by the cooldown, so a host
+    // `claude` refresh still recovers the app promptly without any token-endpoint call. Disk
+    // adoption is the PRIMARY recovery path; our own network refresh is a rare last resort.
 
     private static readonly HttpClient _http = new();
     private readonly ILogger<UsageService> _logger;
@@ -69,16 +72,29 @@ public sealed class UsageService
 
         if (creds.RefreshToken is not null && IsExpiringSoon(creds.ExpiresAt))
         {
-            if (IsInRefreshCooldown(out var remaining))
+            // FIX 1: prefer a token the host `claude` CLI already refreshed on disk. Re-read the
+            // credentials file RIGHT NOW and, if disk carries a fresher token with real runway,
+            // adopt it and SKIP the network refresh entirely -- this is what stops us competing
+            // with claude for the same rate-limited token endpoint. Adoption is a local file read,
+            // never a POST, so it is allowed even while a 429 cooldown suppresses network refresh.
+            var adopted = await TryAdoptFresherDiskTokenAsync(creds);
+            if (adopted is not null)
             {
-                // Suppressed by an earlier 429. Do NOT spend the attempt; let the poll fail to
-                // the poller's own backoff. This is the whole fix for the self-inflicted 429.
-                _authLog.Log($"PROACTIVE refresh SKIPPED: in cooldown, {remaining / 1000}s remaining.");
+                creds = adopted;   // poll below uses the disk token; no refresh fired
+            }
+            else if (IsInRefreshCooldown(out var remaining))
+            {
+                // Disk is ALSO stale and we're suppressed by an earlier 429. Do NOT spend the
+                // attempt; let the poll fail to the poller's own backoff. This is the whole fix
+                // for the self-inflicted 429.
+                _authLog.Log($"PROACTIVE refresh SKIPPED: disk token also stale, in cooldown, {remaining / 1000}s remaining.");
             }
             else
             {
+                // Genuine claude-idle case: BOTH in-memory and freshly-read disk tokens are within
+                // the skew window. Now -- and only now -- run our own network refresh.
                 refreshAttempted = true;
-                _authLog.Log("PROACTIVE refresh firing (token expired or within skew window).");
+                _authLog.Log("PROACTIVE NETWORK-REFRESH firing (in-memory AND disk tokens both expired/within skew).");
                 var refreshed = await TryRefreshAsync(creds.RefreshToken);
                 if (refreshed is not null)
                 {
@@ -108,12 +124,25 @@ public sealed class UsageService
             // The poll came back 401 and we have NOT already spent our refresh this cycle.
             // Try exactly one refresh, then retry the poll once. If the refresh fails, or the
             // retried poll still 401s, the exception propagates to the poller's backoff path.
+            // FIX 1: before POSTing a refresh in response to the 401, re-read disk -- claude may
+            // have refreshed the token since this poll started. If so, adopt it and retry the
+            // poll with no network refresh (and ignoring any cooldown, since adoption is local).
+            var adopted = await TryAdoptFresherDiskTokenAsync(creds);
+            if (adopted is not null)
+            {
+                _authLog.Log("REACTIVE adopted fresher disk token; retrying poll WITHOUT network refresh.");
+                return await PollUsageAsync(adopted.AccessToken);
+            }
             if (IsInRefreshCooldown(out var remaining))
             {
-                _authLog.Log($"REACTIVE refresh SKIPPED: in cooldown, {remaining / 1000}s remaining; propagating 401 to poller backoff.");
-                throw;
+                // Own-refresh is suppressed by the sticky 429 cooldown and disk has nothing
+                // fresher. Surface this as a DISTINCT signal (not a bare 401) so the poller shows
+                // "token endpoint rate-limited -- waiting on host refresh" and keeps polling at the
+                // base cadence to re-check disk-adoption, rather than ramping an auth backoff.
+                _authLog.Log($"REACTIVE refresh SUPPRESSED: disk token not fresher, in sticky cooldown, {remaining / 1000}s (~{remaining / 60000}min) remaining; surfacing refresh-rate-limited, NOT poking token endpoint.");
+                throw new RefreshRateLimitedException(_refreshCooldownUntilMs);
             }
-            _authLog.Log("REACTIVE: poll 401, gate open (no refresh this cycle), refresh token present => attempting one reactive refresh.");
+            _authLog.Log("REACTIVE NETWORK-REFRESH: poll 401, disk token not fresher, gate open, refresh token present => one reactive refresh.");
             _logger.LogWarning("Usage poll returned 401; attempting one token refresh.");
             var refreshed = await TryRefreshAsync(creds.RefreshToken);
             if (refreshed is null)
@@ -134,6 +163,47 @@ public sealed class UsageService
                 $"refreshTokenPresent={creds.RefreshToken is not null}; propagating to poller backoff.");
             throw;
         }
+    }
+
+    // FIX 1 helper -- "adopt-disk-token vs network-refresh" decision.
+    //
+    // Re-reads .credentials.json from disk and returns the disk credential set IFF it is a
+    // genuinely fresher token than the one we are holding: a strictly later expiresAt AND
+    // still outside the refresh-skew window (real runway, not itself about-to-expire). That
+    // is exactly the "claude already refreshed it for us" case -- adopt it and skip our own
+    // network refresh. Returns null when disk is no better (both stale -> caller falls through
+    // to the real network-refresh path) or when the re-read fails (never throws).
+    //
+    // Freshness is detected purely from expiresAt: each writer stamps expiresAt = now + expires_in
+    // on refresh, so a later expiresAt unambiguously means a newer token set.
+    private async Task<Credentials?> TryAdoptFresherDiskTokenAsync(Credentials inMemory)
+    {
+        Credentials disk;
+        try
+        {
+            disk = await ReadCredentialsAsync();
+        }
+        catch (Exception ex)
+        {
+            _authLog.LogException("DISK re-read for adoption FAILED (falling through to refresh path)", ex);
+            return null;
+        }
+
+        var fresher   = disk.ExpiresAt > inMemory.ExpiresAt;
+        var hasRunway = !IsExpiringSoon(disk.ExpiresAt);
+        if (fresher && hasRunway)
+        {
+            _authLog.Log(
+                $"ADOPT-DISK-TOKEN: disk expiresAt={disk.ExpiresAt} ({FormatMs(disk.ExpiresAt)}) > " +
+                $"memory={inMemory.ExpiresAt} ({FormatMs(inMemory.ExpiresAt)}) and outside skew; " +
+                $"adopting disk token, SKIPPING network refresh. access({Preview(disk.AccessToken)})");
+            return disk;
+        }
+
+        _authLog.Log(
+            $"DISK re-read: expiresAt={disk.ExpiresAt} ({FormatMs(disk.ExpiresAt)}) fresher={fresher} " +
+            $"hasRunway={hasRunway}; NOT adopting -> network-refresh path.");
+        return null;
     }
 
     private static async Task<UsageData> PollUsageAsync(string token)
@@ -177,13 +247,17 @@ public sealed class UsageService
         var cooldownMs   = RefreshCooldownPolicy.ComputeMs(_consecutive429, retryAfterMs);
         _refreshCooldownUntilMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + cooldownMs;
 
-        var basis = retryAfterMs is { } ra ? $"Retry-After={ra}ms" : $"exponential ramp (consecutive429={_consecutive429})";
+        var basis = retryAfterMs is { } ra ? $"Retry-After={ra}ms" : $"sticky ramp (consecutive429={_consecutive429})";
         _authLog.Log(
             $"REFRESH 429 -> cooldown ENTERED: {cooldownMs}ms (~{cooldownMs / 60000}min) via {basis}; " +
-            $"no refresh until {FormatMs(_refreshCooldownUntilMs)}.");
+            $"no OWN refresh until {FormatMs(_refreshCooldownUntilMs)} (disk-adoption still active).");
     }
 
-    // Clears the cooldown (called on any refresh success). Logs only if something was armed.
+    // Clears the cooldown and zeroes the consecutive-429 ramp. Called ONLY from a successful
+    // own network refresh (HTTP 200) -- deliberately NOT from disk-adoption recovery. A host
+    // `claude` refresh that we merely adopt does NOT prove our own refresh would now succeed
+    // (the token endpoint may still be rate-limiting our IP), so the network-refresh backoff
+    // must keep escalating across the whole event until WE get a real 200.
     private void ClearRefreshCooldown(string reason)
     {
         if (_refreshCooldownUntilMs != 0 || _consecutive429 != 0)
@@ -506,4 +580,20 @@ public sealed class UsageService
         [property: JsonPropertyName("accessToken")]  string? AccessToken,
         [property: JsonPropertyName("refreshToken")] string? RefreshToken,
         [property: JsonPropertyName("expiresAt")]    long ExpiresAt);
+}
+
+// Thrown by FetchAsync when a poll could not be authorized AND our own network refresh is
+// suppressed by the sticky token-endpoint 429 cooldown -- i.e. the token is expired, disk has
+// nothing fresher to adopt, and we are deliberately NOT poking the rate-limited token endpoint.
+// Distinct from a bare 401 so the poller can surface "token endpoint rate-limited -- waiting on
+// host refresh" and keep polling at the normal cadence (each poll re-checks disk-adoption, the
+// primary recovery path) instead of treating it as an ordinary auth failure. SuppressedUntilMs
+// is the unix-ms instant the own-refresh suppression lifts.
+public sealed class RefreshRateLimitedException : Exception
+{
+    public long SuppressedUntilMs { get; }
+
+    public RefreshRateLimitedException(long suppressedUntilMs)
+        : base("Token refresh suppressed by sticky 429 cooldown; awaiting host disk refresh.")
+        => SuppressedUntilMs = suppressedUntilMs;
 }

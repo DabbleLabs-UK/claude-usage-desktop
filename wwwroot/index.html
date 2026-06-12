@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claude Usage</title>
+  <!-- App favicon for the browser tab (served from wwwroot; works for the phone/LAN client too) -->
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="apple-touch-icon" href="logo_dabblelabs.png">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -280,6 +283,13 @@
       flex: 1;
     }
 
+    /* Caption label above each bar in the detail view */
+    .bar-caption {
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin: 5px 0 2px;
+    }
+
     /* Spare ratio: standalone coloured number shown below the bars */
     .spare-ratio-line {
       font-size: 0.7rem;
@@ -288,6 +298,12 @@
       line-height: 1.3;
     }
     .spare-ratio-value {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .no-svc-dur b {
+      color: var(--red);
       font-weight: 700;
       font-variant-numeric: tabular-nums;
     }
@@ -834,31 +850,24 @@
     </div>
     <div class="setting-row">
       <div>
-        <div class="setting-label">Red alert (%)</div>
-        <div class="setting-note">Spare ratio turns red below this (default 10)</div>
+        <div class="setting-label">Orange threshold (%)</div>
+        <div class="setting-note">Prediction bar turns orange above this projected usage (default 90)</div>
       </div>
-      <input type="number" id="settingRedThreshold" class="port-input" min="0" max="99" step="1">
+      <input type="number" id="settingOrangeThreshold" class="port-input" min="1" max="99" step="1">
     </div>
     <div class="setting-row">
       <div>
-        <div class="setting-label">Orange alert (%)</div>
-        <div class="setting-note">Spare ratio turns orange below this (default 25)</div>
+        <div class="setting-label">Yellow threshold (%)</div>
+        <div class="setting-note">Prediction bar turns yellow above this projected usage (default 50)</div>
       </div>
-      <input type="number" id="settingOrangeThreshold" class="port-input" min="1" max="100" step="1">
+      <input type="number" id="settingYellowThreshold" class="port-input" min="1" max="99" step="1">
     </div>
     <div class="setting-row">
       <div>
-        <div class="setting-label">Yellow alert (%)</div>
-        <div class="setting-note">Spare ratio turns yellow below this (default 50)</div>
+        <div class="setting-label">Yellow-green threshold (%)</div>
+        <div class="setting-note">Prediction bar turns yellow-green above this projected usage (default 25)</div>
       </div>
-      <input type="number" id="settingYellowThreshold" class="port-input" min="1" max="100" step="1">
-    </div>
-    <div class="setting-row">
-      <div>
-        <div class="setting-label">Yellow-green alert (%)</div>
-        <div class="setting-note">Spare ratio turns yellow-green below this (default 75)</div>
-      </div>
-      <input type="number" id="settingYellowGreenThreshold" class="port-input" min="1" max="100" step="1">
+      <input type="number" id="settingYellowGreenThreshold" class="port-input" min="1" max="99" step="1">
     </div>
     <div class="setting-row">
       <div>
@@ -968,7 +977,7 @@
 <script>
   let lastData                = null;
   let _instanceId             = null;
-  let _thresholds             = { red: 0.10, orange: 0.25, yellow: 0.50, yellowGreen: 0.75 };
+  let _thresholds             = { orange: 0.90, yellow: 0.50, yellowGreen: 0.25 };
   let _reconnectPollTimer     = null;
   let _cardDataMap            = {};
   let _openCardKey            = null;
@@ -993,12 +1002,11 @@
     return 'var(--green)';
   }
 
-  // ratio: spare ratio as a real % value (uncapped); thresholds stored as fractions
-  function ratioColor(ratio) {
-    if (ratio <= _thresholds.red         * 100) return 'var(--red)';
-    if (ratio <= _thresholds.orange      * 100) return 'var(--orange)';
-    if (ratio <= _thresholds.yellow      * 100) return 'var(--yellow)';
-    if (ratio <= _thresholds.yellowGreen * 100) return 'var(--yellow-green)';
+  function projColor(proj) {
+    if (proj > 100)                            return 'var(--red)';
+    if (proj > _thresholds.orange      * 100) return 'var(--orange)';
+    if (proj > _thresholds.yellow      * 100) return 'var(--yellow)';
+    if (proj > _thresholds.yellowGreen * 100) return 'var(--yellow-green)';
     return 'var(--green)';
   }
 
@@ -1019,6 +1027,22 @@
 
   function fmtPct(p) {
     return (p % 1 === 0 ? p.toFixed(0) : p.toFixed(1)) + '%';
+  }
+
+  function fmtTimeWithoutService(totalSec) {
+    totalSec = Math.floor(Math.max(0, totalSec));
+    const d = Math.floor(totalSec / 86400);
+    const h = Math.floor((totalSec % 86400) / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    const vals = [d, h, m, s], suf = ['d','h','m','s'];
+    const parts = [];
+    for (let i = 0; i < 4 && parts.length < 2; i++) {
+      if (!parts.length && vals[i] === 0 && i < 3) continue;
+      const pad = i >= 2 && parts.length > 0;
+      parts.push((pad ? String(vals[i]).padStart(2,'0') : vals[i]) + suf[i]);
+    }
+    return parts.length ? parts.join(' ') : '0s';
   }
 
   function currencySymbol(code) {
@@ -1058,7 +1082,7 @@
       const expired  = Date.now() >= resetsAt;
       const elapsed  = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
       const proj     = pct / elapsed;
-      const pc       = color(proj); // bars use usage-% colour; threshold ladder lives on the spare ratio
+      const pc       = projColor(proj);
 
       // Dynamic linear axis: the track spans 0..AXIS_MAX % of cap. Once the projection crosses 100%,
       // AXIS_MAX = proj, so the projected tip lands flush at the track's right edge (no wasted track);
@@ -1095,7 +1119,7 @@
       const projIsZero = proj < 0.5;
       const isOver     = !projIsZero && proj >= 100;
       const ratioEmoji = isOver ? '❌' : '✅';
-      const rc         = isOver ? 'var(--red)' : 'var(--green)';
+      const rc         = projIsZero ? 'var(--green)' : projColor(proj);
       const ratioFmt   = projIsZero ? '∞ until usage not 0%'
                        : rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
                        : Math.round(rawRatio) + '%';
@@ -1105,6 +1129,19 @@
         ? '<div class="rounding-warning">Usage % is rounded to whole numbers -- actual usage could be slightly higher than shown. Near the weekly cap, treat the remaining headroom as approximate.</div>'
         : '';
 
+      const _elapsedSec0     = elapsed * windowMs / 1000;
+      const _secsUntilReset0 = Math.max(0, (resetsAt - Date.now()) / 1000);
+      const _secsUntil100_0  = pct >= 100 ? 0 : Math.max(0, (100 - pct) * _elapsedSec0 / pct);
+      const _noSvcSec0       = Math.max(0, _secsUntilReset0 - _secsUntil100_0);
+      const noSvcSpan = '<span class="no-svc-dur" data-pct="' + pct
+        + '" data-window-ms="' + windowMs + '" data-resets-at="' + w.resetsAt + '">'
+        + (isOver && _noSvcSec0 > 0
+          ? '   Est. time without service: <b>' + fmtTimeWithoutService(Math.round(_noSvcSec0)) + '</b>'
+          : '')
+        + '</span>';
+
+      const wrapStyle = 'style="--time-pos:' + (elapsed * capPos).toFixed(4) + ';--cap-pos:' + capPos.toFixed(4) + '"';
+      const period   = !clickable ? barPeriod(windowMs) : null;
       return (
         '<div class="card"' + clickAttr + '>'
         // Head: short label left, countdown right
@@ -1112,29 +1149,51 @@
         + '<span class="label">' + (compactLabel || label) + '</span>'
         + '<span class="countdown" data-resets-at="' + w.resetsAt + '">' + timeUntilSec(w.resetsAt) + '</span>'
         + '</div>'
-        // Both bars in a wrapper so the cap-line and elapsed-line can span them both. The line
-        // positions are pre-scaled by capPos (time-pos = elapsed * capPos; cap-pos = capPos).
-        + '<div class="bars-wrapper" style="--time-pos:' + (elapsed * capPos).toFixed(4) + ';--cap-pos:' + capPos.toFixed(4) + '">'
-        // Actual bar (ghosted): honest fill on the fixed axis; never moves with projection. The
-        // projected-overflow hatch sits on this row, past the 100% cap-line (right of the green fill).
-        + '<div class="bar-row"><div class="track">'
-        + '<div class="fill" style="width:' + actualFill + '%;background:' + c + ';opacity:0.55"></div>'
-        + projHatch
-        + '</div><span class="bar-side-label" style="color:' + c + '">' + fmtPct(pct) + '</span></div>'
-        // Projected bar: clean solid fill all the way to the projected tip (clamp glow past axis end)
-        + '<div class="bar-row"><div class="proj-track">'
-        + '<div class="fill" style="width:' + projFill + '%;background:' + pc + '"></div>'
-        + projClamp
-        + '</div><span class="bar-side-label" style="color:' + pc + '">' + fmtPct(proj) + '</span></div>'
-        // 100% cap marker + elapsed-time marker, both spanning the two bars
-        + '<div class="cap-line"></div>'
-        + '<div class="elapsed-line"></div>'
-        + '</div>'
+        // In the detail view (!clickable) each bar gets its own wrapper + caption so the
+        // cap-line / elapsed-line don't extend through the caption text. In grid cards,
+        // both bars share one wrapper so the lines span both rows (original layout).
+        + (clickable
+          ? '<div class="bars-wrapper" ' + wrapStyle + '>'
+            // Actual bar (ghosted): honest fill on the fixed axis; never moves with projection.
+            + '<div class="bar-row"><div class="track">'
+            + '<div class="fill" style="width:' + actualFill + '%;background:' + c + ';opacity:0.55"></div>'
+            + projHatch
+            + '</div><span class="bar-side-label" style="color:' + c + '">' + fmtPct(pct) + '</span></div>'
+            // Projected bar: clean solid fill all the way to the projected tip
+            + '<div class="bar-row"><div class="proj-track">'
+            + '<div class="fill" style="width:' + projFill + '%;background:' + pc + '"></div>'
+            + projClamp
+            + '</div><span class="bar-side-label" style="color:' + pc + '">' + fmtPct(proj) + '</span></div>'
+            // 100% cap marker + elapsed-time marker, both spanning the two bars
+            + '<div class="cap-line"></div>'
+            + '<div class="elapsed-line"></div>'
+            + '</div>'
+          : // Detail view: split wrappers so lines stay within each bar's own row
+            '<div class="bar-caption">Actual usage ' + period + ':</div>'
+            + '<div class="bars-wrapper" ' + wrapStyle + '>'
+            + '<div class="bar-row"><div class="track">'
+            + '<div class="fill" style="width:' + actualFill + '%;background:' + c + ';opacity:0.55"></div>'
+            + projHatch
+            + '</div><span class="bar-side-label" style="color:' + c + '">' + fmtPct(pct) + '</span></div>'
+            + '<div class="cap-line"></div>'
+            + '<div class="elapsed-line"></div>'
+            + '</div>'
+            + '<div class="bar-caption">Predicted usage ' + period + ':</div>'
+            + '<div class="bars-wrapper" ' + wrapStyle + '>'
+            + '<div class="bar-row"><div class="proj-track">'
+            + '<div class="fill" style="width:' + projFill + '%;background:' + pc + '"></div>'
+            + projClamp
+            + '</div><span class="bar-side-label" style="color:' + pc + '">' + fmtPct(proj) + '</span></div>'
+            + '<div class="cap-line"></div>'
+            + '<div class="elapsed-line"></div>'
+            + '</div>'
+        )
         // Spare ratio: coloured number, or "window ended" when the period has elapsed
         + (expired
           ? '<div class="spare-ratio-line" style="color:var(--muted)">Window ended — usage will update when the new period begins</div>'
           : '<div class="spare-ratio-line">Remaining period predicted spare ratio: '
             + '<span class="spare-ratio-value" style="color:' + rc + '">' + ratioFmt + ' ' + ratioEmoji + '</span>'
+            + noSvcSpan
             + '</div>'
             + weekRoundingWarn)
         + '</div>');
@@ -1239,9 +1298,19 @@
     return h < 24 ? h + '-hour' : (h / 24) + '-day';
   }
 
+  // Short period label for bar captions in the detail view.
+  function barPeriod(ms) {
+    if (!ms) return 'the period';
+    return ms / 3600000 < 24 ? 'this session' : 'this week';
+  }
+
   function render(data) {
     lastData = data;
-    if (data && !data.isStale && data.windows && Object.keys(data.windows).length > 0)
+    // Remember the last payload that carries real windows as the fallback to show (dimmed)
+    // during backoff. Fresh (non-stale) data always wins; a stale payload is accepted only
+    // when we have nothing better yet -- e.g. the last-known sample seeded on relaunch, so
+    // the page shows numbers instead of going blank.
+    if (data && data.windows && Object.keys(data.windows).length > 0 && (!data.isStale || !_lastGoodData))
       _lastGoodData = data;
     const windows = (data && data.windows) || {};
     _cardDataMap = {};
@@ -1289,7 +1358,7 @@
         const hw = 100 - pr;
         const rr = rp > 0.5 ? (hw / rp) * 100 : (hw > 0 ? 100 : 0);
         const dr = Math.round(rr);
-        document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(el, dr, ratioColor(rr));
+        document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(el, dr, projColor(pr));
       }
     }
     _checkToolbarOverflow();
@@ -1304,6 +1373,13 @@
     if (t === 'rate_limit') return 'Rate-limited';
     if (t === 'auth')       return 'Auth error';
     return 'Error';
+  }
+
+  // The token endpoint is rate-limiting our OWN refresh; the app is waiting to adopt a token
+  // the host Claude Code refreshes on disk. This is a calm waiting state, not a failure ramp,
+  // so it gets a plain message and hides the consecutive-failure / "×2 doubling" backoff noise.
+  function _isRefreshRateLimited() {
+    return _backoffState && _backoffState.errorType === 'refresh_rate_limited';
   }
 
   function _fmtBackoffCountdown(nextAttemptAt) {
@@ -1341,6 +1417,18 @@
       // No cache at all — clear loading so the backoff banner is the sole indicator.
       if (mv && mv.querySelector('.loading')) mv.innerHTML = '';
     }
+    const multEl = banner.querySelector('.backoff-banner-mult');
+    if (_isRefreshRateLimited()) {
+      // Calm waiting state: no failure count, no doubling-interval line.
+      document.getElementById('backoffTitle').textContent = 'Token endpoint rate-limited';
+      document.getElementById('backoffFails').textContent = '';
+      const countdown = _fmtBackoffCountdown(_backoffState.nextAttemptAt);
+      document.getElementById('backoffNext').textContent =
+        'Waiting on Claude Code to refresh the token  \xb7  re-checking in ' + countdown;
+      if (multEl) multEl.classList.add('hidden');
+      return;
+    }
+    if (multEl) multEl.classList.remove('hidden');
     const typeStr = _backoffTypeLabel(_backoffState.errorType);
     document.getElementById('backoffTitle').textContent = typeStr + ' — backing off';
     const n = _backoffState.consecutiveFailures;
@@ -1352,12 +1440,23 @@
 
   setInterval(function() { if (_backoffState) updateBackoffBanner(); }, 1000);
 
-  const conn = new signalR.HubConnectionBuilder()
-    .withUrl('/hub/usage')
-    // Extended retry schedule -- covers slow server restarts.
-    // Polling fallback (below) catches anything beyond this.
-    .withAutomaticReconnect([0, 2000, 5000, 10000, 15000, 20000, 30000, 30000, 30000])
-    .build();
+  // The SignalR client is loaded from a public CDN (see <script> above). A phone that can
+  // reach THIS app over the LAN may have no route to that CDN -> `signalR` is undefined.
+  // Without this guard, `new signalR.HubConnectionBuilder()` throws right here and aborts the
+  // rest of this inline script -- so openStats/openAbout/openSettings (defined further down)
+  // are never created and every toolbar button goes dead. Degrade to a no-op stub + polling
+  // instead; navigation keeps working regardless of CDN reachability.
+  const _signalrLoaded = typeof signalR !== 'undefined';
+  const conn = _signalrLoaded
+    ? new signalR.HubConnectionBuilder()
+        .withUrl('/hub/usage')
+        // Extended retry schedule -- covers slow server restarts.
+        // Polling fallback (below) catches anything beyond this.
+        .withAutomaticReconnect([0, 2000, 5000, 10000, 15000, 20000, 30000, 30000, 30000])
+        .build()
+    : { on() {}, onreconnecting() {}, onreconnected() {}, onclose() {},
+        start() { return Promise.reject(new Error('SignalR client not loaded')); },
+        state: 'Disconnected' };
 
   conn.on('backoffUpdated', function(info) {
     _backoffState = info;
@@ -1378,6 +1477,22 @@
       const next = timeUntilSec(el.dataset.resetsAt);
       if (el.textContent !== 'resetting...' && next === 'resetting...') needsRender = true;
       el.textContent = next;
+    });
+    document.querySelectorAll('.no-svc-dur[data-pct]').forEach(function(el) {
+      const pct      = parseFloat(el.dataset.pct);
+      const windowMs = parseFloat(el.dataset.windowMs);
+      const resetsAt = new Date(el.dataset.resetsAt).getTime();
+      const elapsed    = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
+      const proj       = pct / elapsed;
+      const projIsZero = proj < 0.5;
+      const isOver     = !projIsZero && proj >= 100;
+      const elapsedSec     = elapsed * windowMs / 1000;
+      const secsUntilReset = Math.max(0, (resetsAt - Date.now()) / 1000);
+      const secsUntil100   = pct >= 100 ? 0 : Math.max(0, (100 - pct) * elapsedSec / pct);
+      const noSvcSec       = Math.max(0, secsUntilReset - secsUntil100);
+      el.innerHTML = isOver && noSvcSec > 0
+        ? '   Est. time without service: <b>' + fmtTimeWithoutService(Math.round(noSvcSec)) + '</b>'
+        : '';
     });
     if (needsRender && lastData) render(lastData);
   }, 1000);
@@ -1460,7 +1575,7 @@
       const headroom  = 100 - proj;
       const rawRatio  = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
       const projIsZero = proj < 0.5;
-      const rc         = projIsZero ? 'var(--green)' : ratioColor(rawRatio);
+      const rc         = projIsZero ? 'var(--green)' : projColor(proj);
       const svgFill    = projIsZero ? 100 : Math.min(100, Math.round(rawRatio));
       const ratioFmt   = projIsZero ? '∞ until usage not 0%'
                        : rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
@@ -1580,6 +1695,16 @@
   });
 
   (async function connect() {
+    if (!_signalrLoaded) {
+      // No live hub available (CDN unreachable from this client). Poll for fresh usage so the
+      // page still updates; the toolbar/About/Stats/Settings already work without the hub.
+      console.warn('[CU] SignalR client unavailable -- falling back to polling /api/usage every 15s');
+      setInterval(function() {
+        fetch('/api/usage').then(r => r.ok ? r.json() : null)
+          .then(d => { if (d) render(d); }).catch(function() {});
+      }, 15000);
+      return;
+    }
     try {
       await conn.start();
       console.log('[CU] SignalR connected');
@@ -1622,7 +1747,12 @@
       const { version: cur }    = await vRes.json();
       const { tag_name, html_url } = await gRes.json();
       const latest = (tag_name || '').replace(/^v/, '');
-      if (!latest || !_semverGt(latest, cur)) return;
+      // Banner shows ONLY when the latest release is STRICTLY newer than the running build.
+      // Log both operands so a false banner (e.g. a stale running binary) is diagnosable.
+      const newer = !!latest && _semverGt(latest, cur);
+      console.log('[CU] Update check: running v' + cur + ' vs latest release v' + latest
+        + ' -> ' + (newer ? 'newer available, showing banner' : 'up to date, no banner'));
+      if (!newer) return;
       const link = document.getElementById('updateLink');
       link.textContent = 'v' + latest;
       link.href = html_url;
@@ -1861,15 +1991,19 @@
       document.getElementById('settingCloseToTray').checked = s.closeToTray;
       document.getElementById('settingPort').value          = s.serverPort;
       _loadedPreferredAdapter = s.preferredAdapterName || null;
-      const rt = typeof s.redThreshold         === 'number' ? s.redThreshold         : 0.10;
-      const ot = typeof s.orangeThreshold      === 'number' ? s.orangeThreshold      : 0.25;
-      const yt = typeof s.yellowThreshold      === 'number' ? s.yellowThreshold      : 0.50;
-      const gt = typeof s.yellowGreenThreshold === 'number' ? s.yellowGreenThreshold : 0.75;
-      document.getElementById('settingRedThreshold').value         = Math.round(rt * 100);
+      const ot_raw = typeof s.orangeThreshold      === 'number' ? s.orangeThreshold      : null;
+      const yt_raw = typeof s.yellowThreshold      === 'number' ? s.yellowThreshold      : null;
+      const gt_raw = typeof s.yellowGreenThreshold === 'number' ? s.yellowGreenThreshold : null;
+      // New format stores descending values (orange > yellow > yellowGreen, e.g. 0.90 > 0.50 > 0.25).
+      // Old format was ascending spare-ratio thresholds (e.g. 0.25 < 0.50 < 0.75) — treat as stale, use new defaults.
+      const validNew = ot_raw !== null && yt_raw !== null && gt_raw !== null
+                    && ot_raw > yt_raw && yt_raw > gt_raw;
+      const ot = validNew ? ot_raw : 0.90;
+      const yt = validNew ? yt_raw : 0.50;
+      const gt = validNew ? gt_raw : 0.25;
       document.getElementById('settingOrangeThreshold').value      = Math.round(ot * 100);
       document.getElementById('settingYellowThreshold').value      = Math.round(yt * 100);
       document.getElementById('settingYellowGreenThreshold').value = Math.round(gt * 100);
-      _thresholds.red         = rt;
       _thresholds.orange      = ot;
       _thresholds.yellow      = yt;
       _thresholds.yellowGreen = gt;
@@ -1907,24 +2041,20 @@
     btn.disabled = true;
     msg.textContent = '';
     try {
-      let rPct = parseFloat(document.getElementById('settingRedThreshold').value);
       let oPct = parseFloat(document.getElementById('settingOrangeThreshold').value);
       let yPct = parseFloat(document.getElementById('settingYellowThreshold').value);
       let gPct = parseFloat(document.getElementById('settingYellowGreenThreshold').value);
-      if (!isFinite(rPct) || rPct < 0  || rPct > 99)  rPct = 10;
-      if (!isFinite(oPct) || oPct < 1  || oPct > 100) oPct = 25;
-      if (!isFinite(yPct) || yPct < 1  || yPct > 100) yPct = 50;
-      if (!isFinite(gPct) || gPct < 1  || gPct > 100) gPct = 75;
-      // Enforce ordering: red < orange < yellow < yellowGreen
-      if (rPct >= oPct) rPct = Math.max(0, oPct - 1);
-      if (oPct >= yPct) oPct = Math.max(rPct + 1, yPct - 1);
-      if (yPct >= gPct) yPct = Math.max(oPct + 1, gPct - 1);
+      if (!isFinite(oPct) || oPct < 1 || oPct > 99) oPct = 90;
+      if (!isFinite(yPct) || yPct < 1 || yPct > 99) yPct = 50;
+      if (!isFinite(gPct) || gPct < 1 || gPct > 99) gPct = 25;
+      // Enforce descending ordering: orange > yellow > yellowGreen
+      if (oPct <= yPct) oPct = Math.min(99, yPct + 1);
+      if (yPct <= gPct) yPct = Math.min(oPct - 1, gPct + 1);
       const pickedAdapter = document.getElementById('adapterPicker').value || null;
       const body = {
         startWithWindows:     document.getElementById('settingAutostart').checked,
         closeToTray:          document.getElementById('settingCloseToTray').checked,
         serverPort:           parseInt(document.getElementById('settingPort').value, 10),
-        redThreshold:         rPct / 100,
         orangeThreshold:      oPct / 100,
         yellowThreshold:      yPct / 100,
         yellowGreenThreshold: gPct / 100,
@@ -1936,7 +2066,6 @@
         body: JSON.stringify(body),
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      _thresholds.red         = body.redThreshold;
       _thresholds.orange      = body.orangeThreshold;
       _thresholds.yellow      = body.yellowThreshold;
       _thresholds.yellowGreen = body.yellowGreenThreshold;

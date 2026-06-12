@@ -31,6 +31,14 @@ public sealed class UsageLog
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
+    // Read side of WriteOpts: the camelCase records round-trip back into UsageData. Case-insensitive
+    // so a hand-edited or older-format line still loads rather than silently dropping fields.
+    private static readonly JsonSerializerOptions ReadOpts = new()
+    {
+        PropertyNamingPolicy   = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
+
     private readonly ILogger<UsageLog> _logger;
     private readonly object _writeLock = new();
 
@@ -99,6 +107,54 @@ public sealed class UsageLog
 
         samples.Sort((a, b) => a.Time.CompareTo(b.Time));
         return samples;
+    }
+
+    // Returns the most recently persisted sample as a full UsageData (windows WITH resets_at,
+    // extra_usage, fetchedAt), or null if nothing is logged / nothing parses. Used to seed the
+    // in-memory state on relaunch so the UI can show last-known values (dimmed) before -- or
+    // instead of -- the first successful poll, rather than going blank. Best-effort: scans the
+    // newest monthly file's last good line first, walking back through older months if needed,
+    // and never throws.
+    public UsageData? ReadLastSample()
+    {
+        try
+        {
+            if (!Directory.Exists(LogDir)) return null;
+
+            var files = Directory.GetFiles(LogDir, "*.jsonl");
+            if (files.Length == 0) return null;
+            Array.Sort(files, StringComparer.Ordinal); // yyyy-MM names sort chronologically
+
+            for (var i = files.Length - 1; i >= 0; i--) // newest month first
+            {
+                string? lastLine = null;
+                try
+                {
+                    foreach (var line in File.ReadLines(files[i]))
+                        if (!string.IsNullOrWhiteSpace(line)) lastLine = line;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("Usage-log ReadLastSample failed for {Path} ({Type}); skipped.",
+                        Path.GetFileName(files[i]), ex.GetType().Name);
+                    continue;
+                }
+
+                if (lastLine is null) continue;
+                try
+                {
+                    var data = JsonSerializer.Deserialize<UsageData>(lastLine, ReadOpts);
+                    if (data is not null) return data;
+                }
+                catch (JsonException) { /* torn final line -- fall back to older month */ }
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Usage-log ReadLastSample failed ({Type}); no seed.", ex.GetType().Name);
+            return null;
+        }
     }
 
     // Builds a utilization series for one window key, ready for CumulativeUsage.Compute.
