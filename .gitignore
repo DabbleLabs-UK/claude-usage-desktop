@@ -6,3 +6,4 @@ dist/
 publish/
 binBuildCheck/
 *.zip
+installer/Output/
