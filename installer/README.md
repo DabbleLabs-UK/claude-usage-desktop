@@ -1,82 +1,121 @@
-# ClaudeUsage installer (Inno Setup)
+# ClaudeUsage installer (NSIS)
 
-`ClaudeUsage.iss` builds a **per-user** Windows installer for ClaudeUsage from the
-published `dist\` folder. This must be compiled and tested **on the Windows host**
-(not in the VM/Linux shell) — Inno Setup is a Windows GUI toolchain.
+`ClaudeUsage.nsi` builds a **per-user** Windows installer for ClaudeUsage from
+the published `dist\` folder, using **NSIS** (Nullsoft Scriptable Install
+System).
+
+**Why NSIS (not Inno Setup):** NSIS is licensed under **zlib/libpng** — free for
+any use, commercial or not, with no per-seat or commercial licence fee. (Inno
+Setup's newer releases push a paid commercial licence, which doesn't fit this
+app.) The previous `installer\ClaudeUsage.iss` Inno script has been **removed**;
+this `.nsi` is now the single source of truth for packaging.
+
+Compile and test this **on the Windows host** — `makensis` is Windows-only and
+produces a GUI installer; it cannot be built or run in the VM/Linux shell.
 
 ## What it packages
 
-The contents of `dist\` — the self-contained single-file `ClaudeUsage.exe`, the
-loose native DLLs, and `wwwroot\`. It **excludes** the same cruft as the release
-zip: the runtime `ClaudeUsage.exe.WebView2\` profile dir, `_pkg\`, `*.pdb`, the
-`*.old* / *.bak* / *.stuck* / *.prev* / *_old.exe` rename-dance backups, old
-`*.zip` release artifacts, `RELEASE_NOTES*`, and stray dotfiles. (The empty
-single-file language dirs `cs\ de\ es\ …` are skipped automatically — they hold
-no files, so `recursesubdirs` never recreates them.)
+The published `dist\` payload — the self-contained single-file `ClaudeUsage.exe`,
+the loose native DLLs, the WebView2 `.xml` docs, and `wwwroot\`. It **excludes**
+the same cruft as the release zip: the runtime `ClaudeUsage.exe.WebView2\`
+profile dir, `_pkg\`, the empty single-file locale dirs (`cs\ de\ es\ …`),
+`*.pdb`, `*.old* / *.bak* / *.stuck* / *.prev* / *_old.exe`, old `*.zip`
+artifacts, `RELEASE_NOTES*`, and stray dotfiles.
 
-## 1. Install Inno Setup on the host (one-time)
+> **NSIS uses an explicit `File` list**, not Inno's wildcard-with-excludes. That
+> means a *new* file added to `dist\` by a future `dotnet publish` (e.g. a native
+> DLL from a .NET runtime bump) could be **silently missed**. Always run the
+> verifier below after publishing and before compiling.
 
-Download from <https://jrsoftware.org/isdl.php> and run the installer, **or** via
+### Verify the dist payload (run after each publish, before compiling)
+
+From the repo root, in PowerShell — prints any top-level `dist\` entry that is
+neither shipped by the script nor known cruft (empty dirs ignored). **If it
+prints anything, add it to `SEC_CORE` in the `.nsi` (and to the uninstaller's
+`Delete` list) or confirm it is cruft:**
+
+```powershell
+$shipped = 'ClaudeUsage.exe','aspnetcorev2_inprocess.dll','D3DCompiler_47_cor3.dll',
+  'PenImc_cor3.dll','PresentationNative_cor3.dll','vcruntime140_cor3.dll',
+  'WebView2Loader.dll','wpfgfx_cor3.dll','Microsoft.Web.WebView2.Core.xml',
+  'Microsoft.Web.WebView2.WinForms.xml','Microsoft.Web.WebView2.Wpf.xml',
+  'runtimes','wwwroot'
+Get-ChildItem dist | Where-Object {
+  $_.Name -notin $shipped -and
+  $_.Name -notmatch '\.(old|bak|stuck|prev|pdb|zip)|\.WebView2$|^_pkg$|^\.|^RELEASE_NOTES|_old\.exe$' -and
+  -not ($_.PSIsContainer -and @($_.GetFileSystemInfos()).Count -eq 0)
+} | Select-Object -ExpandProperty Name
+```
+
+## 1. Install NSIS on the host (one-time)
+
+Download from <https://nsis.sourceforge.io/Download> and install, **or** via
 winget:
 
 ```powershell
-winget install JRSoftware.InnoSetup
+winget install NSIS.NSIS
 ```
 
-The command-line compiler is `iscc.exe`, typically at:
+The command-line compiler is `makensis.exe`, typically at:
 
 ```
-C:\Program Files (x86)\Inno Setup 6\ISCC.exe
+C:\Program Files (x86)\NSIS\makensis.exe
 ```
 
 ## 2. Compile
 
-First make sure `dist\` holds a current publish (see the release/packaging notes).
-Then, from the **repo root**:
+Make sure `dist\` holds a current publish and the verifier above is clean. Then
+from the **repo root**:
 
 ```powershell
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=0.2.0 installer\ClaudeUsage.iss
+& "C:\Program Files (x86)\NSIS\makensis.exe" /DAPP_VERSION=0.2.0 installer\ClaudeUsage.nsi
 ```
 
-- `/DAppVersion=0.2.0` sets the version shown in Add/Remove Programs and the
-  output filename. **Bump it each release** to match `ClaudeUsage.csproj`'s
-  `<Version>`.
-- If you omit `/DAppVersion`, the script reads the version from
-  `dist\ClaudeUsage.exe`'s file-version metadata at compile time instead.
+- `/DAPP_VERSION=0.2.0` sets the Add/Remove Programs `DisplayVersion`, the
+  installer's own version metadata, and the output filename. **Bump it each
+  release** to match `ClaudeUsage.csproj`'s `<Version>`. Use a 3-part `X.Y.Z`
+  value (the script appends `.0` for the 4-part exe version field).
+- If you omit `/DAPP_VERSION` it falls back to `0.2.0` (the `!define` in the
+  script).
 
 Output: `installer\Output\ClaudeUsage-Setup-0.2.0.exe`.
 
-Paths inside the `.iss` are resolved relative to the script file, so `iscc` can be
-invoked from any working directory; only the payload root (`..\dist`) and the icon
-(`..\design\logo_icon.ico`) must exist.
+Paths inside the `.nsi` are relative to the script file (`..\dist`,
+`..\design\logo_icon.ico`), so `makensis` can be invoked from any working
+directory as long as those exist.
 
 ## Install location & elevation (design notes)
 
-- **Install dir:** `%LOCALAPPDATA%\Programs\ClaudeUsage` (per-user). The wizard
-  runs with `PrivilegesRequired=lowest`, so **install and upgrade never prompt for
-  admin**. Tradeoff vs Program Files: this installs for the current user only —
-  which matches the app's per-user firewall-rule + autostart model. To go
-  all-users instead, switch `DefaultDirName` to `{autopf}\ClaudeUsage` and
-  `PrivilegesRequired=admin` (then both install and upgrade prompt for UAC).
-- **Uninstall cleanup elevation:** the uninstaller itself stays per-user. The
-  `--uninstall-cleanup` step **self-elevates** for the firewall rule only — the
-  exe does its own `runas`, so the user sees **one UAC prompt** for the firewall
-  during uninstall. Declining it is non-fatal (exit code 2: everything else is
-  still cleaned), and the uninstall continues.
+- **Install dir:** `%LOCALAPPDATA%\Programs\ClaudeUsage` (per-user).
+  `RequestExecutionLevel user` means **install and upgrade never prompt for
+  admin**, and Add/Remove Programs registration goes under **HKCU**. This matches
+  the app's per-user firewall-rule + autostart model. The all-users alternative
+  (`$PROGRAMFILES64`, `RequestExecutionLevel admin`, HKLM) is described in a
+  comment block in the `.nsi`.
+- **Uninstall-cleanup elevation:** the uninstaller stays per-user/non-elevated.
+  Its `--uninstall-cleanup` step **self-elevates only for the firewall rule** —
+  `ClaudeUsage.exe` does its own `runas`, so the user sees **one UAC prompt** for
+  the firewall during uninstall. Declining it is non-fatal (cleanup returns exit
+  code 2 with everything else removed); the exit code is ignored and the
+  uninstall continues.
 
 ## Upgrade vs uninstall (the important part)
 
-- **Upgrade** (running a newer setup over an existing install): a stable `AppId`
-  GUID makes Inno do an in-place file replace of the program files only. It
-  **does not** touch `%APPDATA%\ClaudeUsage` (settings + usage logs), the firewall
-  rule, or autostart. `[UninstallRun]` does **not** fire on upgrade, so cleanup is
-  never invoked here.
-- **Uninstall** (via Add/Remove Programs): `[UninstallRun]` runs
-  `ClaudeUsage.exe --uninstall-cleanup` **before** the files are removed, tearing
-  down the firewall rule, autostart, settings, and diagnostic logs via the shared
-  teardown. **Usage logs are kept by default.** An up-front Yes/No prompt
-  (defaulting to No) lets the user also pass `--purge-usage-logs` to delete the
-  usage history.
+- **Upgrade** (running a newer setup over an existing install): `.onInit` detects
+  the prior install via the HKCU uninstall key and installs **in place** over the
+  existing folder. It does **not** run the old uninstaller, so
+  `--uninstall-cleanup` never fires — the firewall rule, autostart, settings and
+  usage logs all survive. Only program files (exe + DLLs + `wwwroot\`) are
+  overwritten; nothing under `%APPDATA%\ClaudeUsage` is touched.
+- **Uninstall** (via Add/Remove Programs): the uninstaller runs
+  `ClaudeUsage.exe --uninstall-cleanup` **before** deleting files (so the exe
+  still exists to run itself), then removes the program files, the HKCU registry
+  keys and the shortcuts. **Usage logs are kept by default.** An up-front Yes/No
+  prompt (default **No**) optionally adds `--purge-usage-logs` to delete the
+  usage history too.
+
+> **Before upgrading, close ClaudeUsage** (tray icon → Exit). A running instance
+> locks `ClaudeUsage.exe`, which would make the in-place file overwrite fail.
 
 ## 3. Manual test checklist (host)
 
@@ -85,26 +124,32 @@ Run the built `ClaudeUsage-Setup-<ver>.exe` and verify:
 **Fresh install**
 - [ ] No UAC prompt during install (per-user).
 - [ ] App installs to `%LOCALAPPDATA%\Programs\ClaudeUsage`.
-- [ ] Start Menu shortcut exists; desktop shortcut only if the task was ticked.
+- [ ] Components page lets you tick/untick the desktop shortcut; Start Menu
+      shortcut always created.
 - [ ] "ClaudeUsage" appears in **Settings → Apps** / Add-Remove Programs with the
-      right version and publisher **DabbleLabs-UK**.
-- [ ] Launch the app; let it create its firewall rule, autostart entry, and write
-      some settings/usage data under `%APPDATA%\ClaudeUsage`.
+      right version, publisher **DabbleLabs-UK**, and a working uninstall entry.
+- [ ] Finish page "Launch ClaudeUsage now" starts the app; let it create its
+      firewall rule, autostart entry, and write settings/usage data under
+      `%APPDATA%\ClaudeUsage`.
 
-**Upgrade** (bump `/DAppVersion`, rebuild, run the newer setup over the install)
-- [ ] No second/parallel entry in Add/Remove Programs — version updates in place.
+**Upgrade** (bump `/DAPP_VERSION`, rebuild, run the newer setup over the install)
+- [ ] Close the running app first.
+- [ ] Installer notes an existing install / upgrades in place (no second,
+      parallel Add/Remove Programs entry; `DisplayVersion` updates).
 - [ ] `%APPDATA%\ClaudeUsage\settings.json` and `usage-log\` are **unchanged**.
-- [ ] The firewall rule `ClaudeUsage-<port>` still exists.
-- [ ] The HKCU `…\Run\ClaudeUsage` autostart entry still exists.
-- [ ] No UAC prompt fired for cleanup (cleanup must NOT run on upgrade).
+- [ ] Firewall rule `ClaudeUsage-<port>` still exists.
+- [ ] HKCU `…\Run\ClaudeUsage` autostart entry still exists.
+- [ ] **No UAC prompt** fired (cleanup must NOT run on upgrade).
 
 **Uninstall — keep logs (default)**
-- [ ] Close the app first (or accept Inno's close-app prompt).
+- [ ] Close the app first.
 - [ ] At the "also delete usage history?" prompt choose **No**.
 - [ ] One UAC prompt appears (firewall removal); accept it.
 - [ ] Firewall rule gone (`netsh advfirewall firewall show rule name="ClaudeUsage-<port>"`
       → "No rules match").
-- [ ] HKCU autostart entry gone; `settings.json` gone; program files gone.
+- [ ] HKCU autostart entry gone; `settings.json` gone; program files +
+      install folder gone; Start Menu/desktop shortcuts gone; Add/Remove entry
+      gone.
 - [ ] `%APPDATA%\ClaudeUsage\usage-log\` **still present**.
 - [ ] Audit log written to `%TEMP%\ClaudeUsage-uninstall-cleanup.log`.
 
