@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claude Usage</title>
+  <!-- The server flips this to true ONLY for the embedded desktop WebView2 (loopback client).
+       Remote LAN browsers (the phone) keep it false, which hides the entire phone-access setup
+       surface (first-run flow, hint card, the "Set up phone access" / QR settings section). -->
+  <script>window.__isLocalClient = false;</script>
   <!-- App favicon for the browser tab (served from wwwroot; works for the phone/LAN client too) -->
   <link rel="icon" type="image/x-icon" href="favicon.ico">
   <link rel="apple-touch-icon" href="logo_dabblelabs.png">
@@ -788,6 +792,157 @@
       text-align: center;
       line-height: 1.4;
     }
+  /* ---- Reusable dismissible hint card (generic; phone-access is its first instance) ---- */
+  .hint-card {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--accent);
+    border-radius: 11px;
+    padding: 12px 38px 12px 14px;
+    margin-bottom: 11px;
+  }
+  .hint-card-title {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 3px;
+  }
+  .hint-card-body {
+    font-size: 0.72rem;
+    color: var(--dim);
+    line-height: 1.4;
+    margin-bottom: 9px;
+  }
+  .hint-card-action {
+    background: var(--accent);
+    color: #0d0d1a;
+    font-weight: 700;
+    font-size: 0.74rem;
+    border: none;
+    border-radius: 7px;
+    padding: 6px 13px;
+    cursor: pointer;
+  }
+  .hint-card-action:hover { opacity: 0.88; }
+  .hint-card-close {
+    position: absolute;
+    top: 6px; right: 6px;
+    width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: none; border-radius: 6px;
+    color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer;
+  }
+  .hint-card-close:hover { color: var(--text); background: var(--border); }
+
+  /* ---- Guided phone-access onboarding modal (mirrors the About modal pattern) ---- */
+  .onboard-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px; background: rgba(0, 0, 0, 0.6);
+  }
+  .onboard-overlay.hidden { display: none; }
+  .onboard-modal {
+    position: relative;
+    width: 100%; max-width: 340px;
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 30px 24px 18px;
+    text-align: center;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  }
+  .onboard-close {
+    position: absolute; top: 10px; right: 10px;
+    width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: none; border-radius: 7px;
+    color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer;
+  }
+  .onboard-close:hover { color: var(--text); background: var(--border); }
+  .onboard-icon { font-size: 2.4rem; line-height: 1; margin-bottom: 12px; }
+  .onboard-title { font-size: 1.0rem; font-weight: 800; color: var(--text); margin-bottom: 9px; }
+  .onboard-text { font-size: 0.78rem; color: var(--dim); line-height: 1.5; margin-bottom: 16px; }
+  .onboard-fallback { font-size: 0.7rem; margin-top: 6px; margin-bottom: 10px; }
+  .onboard-primary {
+    background: var(--accent); color: #0d0d1a;
+    font-weight: 700; font-size: 0.82rem;
+    border: none; border-radius: 8px; padding: 11px 16px;
+    cursor: pointer; width: 100%;
+  }
+  .onboard-primary:hover { opacity: 0.88; }
+  .onboard-primary:disabled { opacity: 0.45; cursor: default; }
+  .onboard-status { font-size: 0.72rem; margin-top: 10px; min-height: 1em; }
+  .onboard-qr { display: flex; justify-content: center; margin-top: 6px; }
+  .onboard-qr canvas, .onboard-qr img { border-radius: 6px; display: block; }
+  .onboard-url {
+    font-size: 0.82rem; font-weight: 600; color: var(--accent);
+    word-break: break-all; margin-top: 12px;
+  }
+  .onboard-dots { display: flex; justify-content: center; gap: 7px; margin-top: 18px; }
+  .onboard-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+  .onboard-dot.active { background: var(--accent); }
+  .onboard-step.hidden { display: none; }
+  /* Subtle text link under the wizard QR that reveals the adapter picker only when needed. */
+  .onboard-link {
+    display: inline-block;
+    background: none; border: none; padding: 4px 0;
+    color: var(--muted); font-size: 0.72rem;
+    text-decoration: underline; cursor: pointer;
+  }
+  .onboard-link:hover { color: var(--text); }
+  #onboardAdapterPicker { margin: 4px 0 14px; }
+
+  /* ---- Reset / clear data modal (reuses .onboard-overlay backdrop) ---- */
+  .reset-modal {
+    position: relative;
+    width: 100%; max-width: 380px;
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 26px 22px 18px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  }
+  .reset-title { font-size: 1.0rem; font-weight: 800; color: var(--text); margin-bottom: 4px; }
+  .reset-sub { font-size: 0.75rem; color: var(--dim); line-height: 1.4; margin-bottom: 14px; }
+  .reset-item { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; cursor: pointer; }
+  .reset-item + .reset-item { border-top: 1px solid var(--border); }
+  .reset-item input[type=checkbox] {
+    margin-top: 2px; width: 16px; height: 16px; flex-shrink: 0;
+    accent-color: var(--accent); cursor: pointer;
+  }
+  .reset-item-label { font-size: 0.82rem; font-weight: 600; color: var(--text); }
+  .reset-item-note { font-size: 0.68rem; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+  /* Precious / irreversible items: visually separated and red-bordered. */
+  .reset-danger {
+    margin-top: 12px; padding: 2px 10px;
+    border: 1px solid var(--red); border-radius: 9px; background: rgba(239, 68, 68, 0.06);
+  }
+  .reset-danger .reset-item { border-top: none; }
+  .reset-danger-label { color: var(--red) !important; }
+  .reset-restart {
+    display: flex; gap: 9px; align-items: center;
+    margin: 16px 0 6px; font-size: 0.78rem; color: var(--text); cursor: pointer;
+  }
+  .reset-restart input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+  .reset-summary { margin: 4px 0 12px; padding-left: 18px; }
+  .reset-summary li { font-size: 0.78rem; color: var(--text); margin: 3px 0; }
+  .reset-summary li.danger { color: var(--red); font-weight: 700; }
+  .reset-usage-warn {
+    border: 1px solid var(--red); border-radius: 9px; background: rgba(239, 68, 68, 0.06);
+    padding: 10px 12px; margin-bottom: 12px;
+  }
+  .reset-usage-warn label { display: flex; gap: 9px; align-items: flex-start; font-size: 0.76rem; color: var(--text); cursor: pointer; }
+  .reset-usage-warn input { margin-top: 2px; width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--red); cursor: pointer; }
+  .reset-exec-msg { font-size: 0.74rem; min-height: 1em; margin: 4px 0 10px; }
+  .reset-actions { display: flex; gap: 10px; align-items: center; }
+  .reset-actions .onboard-primary { width: auto; flex: 1; }
+  .reset-actions .back-btn { flex-shrink: 0; }
+  .reset-danger-btn { background: var(--red); color: #fff; }
+  .reset-danger-btn:disabled { opacity: 0.45; cursor: default; }
   </style>
 </head>
 <body>
@@ -816,7 +971,22 @@
     <span class="settings-title">Settings</span>
   </div>
 
-  <!-- LAN / phone access panel -->
+  <!-- Stateful top slot. NOT-set-up -> this guided-setup card. Set-up -> the #lanPanel QR below
+       takes the top slot and this card is hidden (toggled in loadSettings on firewallSetupDone). -->
+  <div class="setting-card" id="phoneSetupCard">
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Set up phone access</div>
+        <div class="setting-note">Guided walkthrough: open the port and scan a QR code</div>
+      </div>
+      <button class="firewall-btn" onclick="openOnboarding()">Set up</button>
+    </div>
+  </div>
+
+  <!-- LAN / phone access panel -- only revealed once phone access is ACTUALLY enabled
+       (gated in loadSettings on firewallSetupDone). When enabled this becomes the top-slot
+       content (the set-up card above is hidden). A QR is never shown while the port is closed,
+       since scanning it would lead to a refused connection. -->
   <div class="lan-panel hidden" id="lanPanel">
     <div class="lan-panel-label">Phone access</div>
     <div class="lan-url" id="lanUrl"></div>
@@ -869,17 +1039,21 @@
       </div>
       <input type="number" id="settingYellowGreenThreshold" class="port-input" min="1" max="99" step="1">
     </div>
-    <div class="setting-row">
-      <div>
-        <div class="setting-label">Phone access</div>
-        <div class="setting-note" id="firewallStatus">Checking...</div>
-      </div>
-      <button id="firewallBtn" class="firewall-btn" onclick="enablePhoneAccess()">Enable</button>
-    </div>
   </div>
 
   <button id="saveBtn" class="save-btn" onclick="saveSettings()">Save Settings</button>
   <div id="saveMsg" class="save-msg"></div>
+
+  <!-- Selective reset / clear-data entry (portable exe has no uninstaller). -->
+  <div class="setting-card">
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Reset / clear data</div>
+        <div class="setting-note">Selectively clear settings, caches, logs, or the firewall rule</div>
+      </div>
+      <button class="firewall-btn" onclick="openReset()">Open</button>
+    </div>
+  </div>
 </div>
 
 <div id="detailView" class="detail-view hidden">
@@ -904,10 +1078,6 @@
     <div class="explain-title">Spare ratio &mdash; zoomed</div>
     <div id="spareRatioSvg"></div>
     <div class="explain-text" id="explainSvg"></div>
-  </div>
-  <div class="explain-block">
-    <div class="explain-title">Elapsed-time line</div>
-    <div class="explain-text" id="explainLine"></div>
   </div>
 </div>
 
@@ -972,6 +1142,144 @@
   </div>
 </div>
 
+<!-- Guided phone-access onboarding: one shared 3-step flow reached from first-run auto-show,
+     the Settings "Set up phone access" button, and the home-page hint card. Layered modal over
+     whatever view is showing (same history-push pattern as the About modal). -->
+<div id="onboardOverlay" class="onboard-overlay hidden" onclick="if (event.target === this) history.back()">
+  <div class="onboard-modal" role="dialog" aria-modal="true" aria-label="Set up phone access">
+    <button class="onboard-close" onclick="history.back()" title="Close" aria-label="Close">&times;</button>
+
+    <!-- Step 1: explain the benefit -->
+    <div class="onboard-step" id="onboardStep1">
+      <div class="onboard-icon">&#128241;</div>
+      <div class="onboard-title">View your usage on your phone</div>
+      <div class="onboard-text">See your Claude usage on your phone over the same Wi-Fi. Setup opens a firewall port (5005) on this PC so your phone can reach it.</div>
+      <button class="onboard-primary" onclick="onboardGoEnable()">Get started</button>
+    </div>
+
+    <!-- Step 2: firewall status. Always VISIBLE (never skipped) -- shows the Enable button when
+         the port is closed, or a ✓ confirmation + Continue when it's already open. -->
+    <div class="onboard-step hidden" id="onboardStep2">
+      <div class="onboard-icon" id="onboardStep2Icon">&#128274;</div>
+      <div class="onboard-title" id="onboardStep2Title">Allow phone access</div>
+      <div class="onboard-text" id="onboardStep2Text">Open port 5005 in Windows Firewall below. You'll see a Windows permission prompt &mdash; approve it to continue.</div>
+      <button class="onboard-primary" id="onboardEnableBtn" onclick="onboardEnable()">Enable phone access</button>
+      <button class="onboard-primary hidden" id="onboardContinueBtn" onclick="_showOnboardStep(3)">Continue</button>
+      <div class="onboard-status" id="onboardEnableStatus"></div>
+    </div>
+
+    <!-- Step 3: show the QR for the auto-selected adapter + LAN URL fallback. The adapter picker
+         is hidden behind a link by default (clean path); only revealed if the phone can't connect. -->
+    <div class="onboard-step hidden" id="onboardStep3">
+      <div class="onboard-icon">&#9989;</div>
+      <div class="onboard-title">Scan with your phone</div>
+      <div class="onboard-text">Scan this with your phone's camera to open Claude Usage.</div>
+      <div class="onboard-qr" id="onboardQr"></div>
+      <div class="onboard-url" id="onboardUrl"></div>
+      <div class="onboard-text onboard-fallback">Or type this address into your phone's browser (same Wi-Fi).</div>
+      <button type="button" class="onboard-link" id="onboardAdapterReveal" onclick="onboardRevealAdapters()">Phone can't connect? Choose a different network</button>
+      <select id="onboardAdapterPicker" class="adapter-picker hidden" onchange="onboardAdapterPick(this.value)">
+        <option value="">Auto (best guess)</option>
+      </select>
+      <button class="onboard-primary" onclick="history.back()">Done</button>
+    </div>
+
+    <div class="onboard-dots">
+      <span class="onboard-dot" data-step="1"></span>
+      <span class="onboard-dot" data-step="2"></span>
+      <span class="onboard-dot" data-step="3"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Reset / clear data: selective, checkbox-driven clear with a confirm step. Usage logs are
+     precious -> off by default, visually separated, and gated behind a second explicit tick. -->
+<div id="resetOverlay" class="onboard-overlay hidden" onclick="if (event.target === this) history.back()">
+  <div class="reset-modal" role="dialog" aria-modal="true" aria-label="Reset or clear data">
+    <button class="onboard-close" onclick="history.back()" title="Close" aria-label="Close">&times;</button>
+
+    <!-- Step A: pick what to clear -->
+    <div id="resetSelectStep">
+      <div class="reset-title">Reset / clear data</div>
+      <div class="reset-sub">Tick what to clear. Nothing is removed until you confirm.</div>
+
+      <label class="reset-item">
+        <input type="checkbox" id="resetSettings" onchange="_syncResetContinueBtn()">
+        <div>
+          <div class="reset-item-label">Settings &amp; preferences</div>
+          <div class="reset-item-note">Port, thresholds, close-to-tray, adapter, and diagnostic logs. Regenerates trivially.</div>
+        </div>
+      </label>
+      <label class="reset-item">
+        <input type="checkbox" id="resetOnboarding" onchange="_syncResetContinueBtn()">
+        <div>
+          <div class="reset-item-label">Onboarding state</div>
+          <div class="reset-item-note">Re-triggers the setup walkthrough and brings back dismissed hint cards.</div>
+        </div>
+      </label>
+      <label class="reset-item">
+        <input type="checkbox" id="resetWebview2" onchange="_syncResetContinueBtn()">
+        <div>
+          <div class="reset-item-label">Browser cache (WebView2)</div>
+          <div class="reset-item-note">Cleared after the app closes (it's in use while running). Regenerates.</div>
+        </div>
+      </label>
+      <label class="reset-item">
+        <input type="checkbox" id="resetAutostart" onchange="_syncResetContinueBtn()">
+        <div>
+          <div class="reset-item-label">Start-with-Windows entry</div>
+          <div class="reset-item-note">Removes the autostart registry entry.</div>
+        </div>
+      </label>
+      <label class="reset-item">
+        <input type="checkbox" id="resetFirewall" onchange="_syncResetContinueBtn()">
+        <div>
+          <div class="reset-item-label">Firewall rule (port 5005)</div>
+          <div class="reset-item-note" id="resetFirewallNote">Closes the phone-access port. Needs a Windows admin prompt.</div>
+        </div>
+      </label>
+
+      <!-- Precious: off by default, separated, irreversible. -->
+      <div class="reset-danger">
+        <label class="reset-item">
+          <input type="checkbox" id="resetUsageLogs" onchange="_syncResetContinueBtn()">
+          <div>
+            <div class="reset-item-label reset-danger-label">Usage logs &mdash; irreversible</div>
+            <div class="reset-item-note">You'll lose your usage history. This can't be undone.</div>
+          </div>
+        </label>
+      </div>
+
+      <label class="reset-restart">
+        <input type="checkbox" id="resetRestart">
+        <span>Restart app afterwards (otherwise it just closes)</span>
+      </label>
+
+      <button class="onboard-primary" id="resetContinueBtn" onclick="resetContinue()" disabled>Continue&hellip;</button>
+    </div>
+
+    <!-- Step B: confirm -->
+    <div id="resetConfirmStep" class="hidden">
+      <div class="reset-title">Confirm</div>
+      <div class="reset-sub">This will clear:</div>
+      <ul id="resetSummary" class="reset-summary"></ul>
+
+      <div id="resetUsageWarn" class="reset-usage-warn hidden">
+        <label>
+          <input type="checkbox" id="resetUsageConfirm" onchange="_syncResetExecBtn()">
+          <span>I understand I will permanently lose my usage history.</span>
+        </label>
+      </div>
+
+      <div id="resetExecMsg" class="reset-exec-msg"></div>
+      <div class="reset-actions">
+        <button class="back-btn" onclick="resetBackToSelect()">&#8592; Back</button>
+        <button class="onboard-primary reset-danger-btn" id="resetExecBtn" onclick="resetExecute()">Clear &amp; close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
@@ -985,6 +1293,16 @@
   let _adapterCandidates      = [];
   let _backoffState           = null;
   let _lastGoodData           = null;
+  // Onboarding + reusable hint-card state. Loaded from the server-owned settings store
+  // (NOT browser localStorage, which is unavailable in the embedded host). Survives relaunch.
+  let _onboard                = { seen: false, firewallDone: false };
+  let _dismissedHints         = {};   // hint id -> true (persisted server-side, keyed by id)
+  // True ONLY in the embedded desktop WebView2 (server-injected loopback flag). The whole
+  // phone-access setup surface is desktop-only: on a remote browser it's nonsensical (the phone
+  // can't open the PC's firewall, and "scan this QR with your phone" while on the phone is circular).
+  const _isLocalClient        = window.__isLocalClient === true;
+  let _onboardAdapters        = [];   // wizard step-3 adapter candidates (loaded only if picker revealed)
+  let _onboardPort            = 5005; // port the wizard QR points at (from /api/network-info)
 
   async function fetchInstanceId() {
     try {
@@ -1114,14 +1432,14 @@
       const headroom   = 100 - proj;
       const rawRatio   = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
 
-      // proj < 0.5 means effectively zero usage: formula gives ~101% which is misleading.
-      // Show infinity symbol -- runway is conceptually unbounded when nothing has been used.
+      // proj < 0.5 (or non-finite/NaN from missing data) means effectively zero usage: the
+      // spare-ratio formula divides by ~0 and is meaningless, so we show a plain message instead.
       const projIsZero = proj < 0.5;
+      const noUsage    = projIsZero || !isFinite(proj);
       const isOver     = !projIsZero && proj >= 100;
       const ratioEmoji = isOver ? '❌' : '✅';
       const rc         = projIsZero ? 'var(--green)' : projColor(proj);
-      const ratioFmt   = projIsZero ? '∞ until usage not 0%'
-                       : rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
+      const ratioFmt   = rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
                        : Math.round(rawRatio) + '%';
 
       // Rounding warning: Week card only, late in period AND close to cap
@@ -1188,9 +1506,13 @@
             + '<div class="elapsed-line"></div>'
             + '</div>'
         )
-        // Spare ratio: coloured number, or "window ended" when the period has elapsed
+        // Spare ratio: coloured number, "window ended" when the period has elapsed, or a plain
+        // "no usage yet" message at zero/non-finite usage (no divide-by-zero ratio or empty
+        // time-without-service readout). Normal numeric output whenever usage > 0.
         + (expired
           ? '<div class="spare-ratio-line" style="color:var(--muted)">Window ended — usage will update when the new period begins</div>'
+          : noUsage
+          ? '<div class="spare-ratio-line" style="color:var(--green)">No usage yet this period</div>'
           : '<div class="spare-ratio-line">Remaining period predicted spare ratio: '
             + '<span class="spare-ratio-value" style="color:' + rc + '">' + ratioFmt + ' ' + ratioEmoji + '</span>'
             + noSvcSpan
@@ -1314,7 +1636,9 @@
       _lastGoodData = data;
     const windows = (data && data.windows) || {};
     _cardDataMap = {};
-    let html = '';
+    // Dismissible hint cards render at the top of the home view (re-emitted on every render
+    // since render() rebuilds mainView wholesale; dismissed-state lives in _dismissedHints).
+    let html = renderHintCards();
 
     // 1. Fixed known cards, always rendered (greyed when null/absent).
     const rendered = new Set();
@@ -1564,7 +1888,6 @@
     document.getElementById('spareRatioSvgBlock').classList.toggle('hidden', !hasProj);
     document.getElementById('explainProj').parentElement.classList.toggle('hidden', !hasProj);
     document.getElementById('explainRatio').parentElement.classList.toggle('hidden', !hasProj);
-    document.getElementById('explainLine').parentElement.classList.toggle('hidden', !hasProj);
 
     if (hasProj) {
       // Compute spare-ratio values for the SVG (same formulas as card())
@@ -1575,17 +1898,18 @@
       const headroom  = 100 - proj;
       const rawRatio  = remPeriod > 0.5 ? (headroom / remPeriod) * 100 : (headroom > 0 ? 100 : 0);
       const projIsZero = proj < 0.5;
+      const noUsage    = projIsZero || !isFinite(proj);
       const rc         = projIsZero ? 'var(--green)' : projColor(proj);
       const svgFill    = projIsZero ? 100 : Math.min(100, Math.round(rawRatio));
-      const ratioFmt   = projIsZero ? '∞ until usage not 0%'
-                       : rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
+      const ratioFmt   = rawRatio > 500 ? (rawRatio / 100).toFixed(1) + 'x'
                        : Math.round(rawRatio) + '%';
       document.getElementById('spareRatioSvg').innerHTML = buildSpareRatioSvg(
-        elapsed, svgFill, rc, projIsZero ? '∞ spare' : null);
-      document.getElementById('explainSvg').textContent =
-        'Top: predicted usage across the full window, now-marker shown. '
-        + 'Bottom: the remaining slice (now → period end) stretched full width — '
-        + 'coloured fill = ' + ratioFmt + ' spare. Full bar = all remaining time is spare; empty = none.';
+        elapsed, svgFill, rc, noUsage ? 'No usage yet' : null);
+      document.getElementById('explainSvg').textContent = noUsage
+        ? 'No usage yet this period — with nothing used so far, all remaining time is spare.'
+        : 'Top: predicted usage across the full window, now-marker shown. '
+          + 'Bottom: the remaining slice (now → period end) stretched full width — '
+          + 'coloured fill = ' + ratioFmt + ' spare. Full bar = all remaining time is spare; empty = none.';
       document.getElementById('explainProj').textContent =
         'Actual usage divided by the fraction of the window elapsed — '
         + 'e.g. 30% used in 40% of the time projects to 75% by reset. '
@@ -1597,8 +1921,6 @@
     document.getElementById('explainActual').textContent = w.resetsAt
       ? 'Usage so far in this ' + win + ' window, as a % of the rate limit. Resets in ' + timeUntilSec(w.resetsAt) + '.'
       : 'Usage so far in this window, as a % of the rate limit.';
-    document.getElementById('explainLine').textContent =
-      'Marks how far through the window you are right now.';
     _hideAllViews();
     document.getElementById('detailView').classList.remove('hidden');
     _checkToolbarOverflow();
@@ -1767,6 +2089,10 @@
   history.replaceState({ view: 'main' }, '');
 
   window.addEventListener('popstate', function(e) {
+    // Layered modals close first (each pushed its own state). Onboarding can sit over the About
+    // modal or any view, so check it before About; both reveal the underlying view untouched.
+    if (!document.getElementById('resetOverlay').classList.contains('hidden')) { closeReset(); return; }
+    if (!document.getElementById('onboardOverlay').classList.contains('hidden')) { closeOnboarding(); return; }
     // About is a modal layered over whatever view is showing -- it's always the last pushed state,
     // so any back gesture closes it first and reveals the underlying view untouched.
     if (!document.getElementById('aboutOverlay').classList.contains('hidden')) { closeAbout(); return; }
@@ -1808,6 +2134,345 @@
     document.getElementById('aboutOverlay').classList.add('hidden');
   }
   window.closeAbout = closeAbout;
+
+  // ---- Reusable dismissible hint cards ----
+  // Generic component: register a card with an id, a content builder, and an optional
+  // `when()` predicate. Cards render at the top of the home view; dismissing one persists
+  // its id server-side (keyed by id) so it stays dismissed across relaunches. The phone-access
+  // card below is the first instance -- add future hints by calling registerHintCard().
+
+  const _hintRegistry = [];   // [{ id, build: () => htmlString, when?: () => bool }]
+
+  function registerHintCard(def) { _hintRegistry.push(def); }
+
+  function renderHintCards() {
+    return _hintRegistry
+      .filter(h => !_dismissedHints[h.id] && (!h.when || h.when()))
+      .map(h => '<div class="hint-card" data-hint-id="' + h.id + '">'
+              + '<button class="hint-card-close" title="Dismiss" aria-label="Dismiss" '
+              +   'onclick="dismissHint(\'' + h.id + '\')">&times;</button>'
+              + h.build()
+              + '</div>')
+      .join('');
+  }
+
+  async function dismissHint(id) {
+    _dismissedHints[id] = true;            // optimistic: hide immediately
+    if (lastData) render(lastData);        // re-render home without the card
+    try {
+      await fetch('/api/hints/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+    } catch (e) { /* stays dismissed this session regardless; retried next dismiss */ }
+  }
+  window.dismissHint = dismissHint;
+
+  // First instance: the phone-access hint card. Gated on dismissed-state ONLY (NOT firewall
+  // state): it stays until the user dismisses it, even if the port is already open. Decoupling
+  // these is deliberate — "seen the intro" and "port is open" are independent facts, so an
+  // onboarding reset brings the card back regardless of the firewall rule. The wizard shows a ✓
+  // when the firewall is already on, so the card pointing into it remains correct.
+  // Desktop-only: never register the card on a remote browser (it's already on the phone).
+  if (_isLocalClient) registerHintCard({
+    id: 'phone-access',
+    build: () =>
+        '<div class="hint-card-title">&#128241; View your usage on your phone</div>'
+      + '<div class="hint-card-body">See Claude Usage on your phone over the same Wi-Fi &mdash; '
+      + 'a quick guided setup opens the port and shows a QR code.</div>'
+      + '<button class="hint-card-action" onclick="openOnboarding()">Set up phone access</button>',
+  });
+
+  // ---- Guided phone-access onboarding flow (3 steps, shared by all three entry points) ----
+
+  window.openOnboarding = function() {
+    if (!_isLocalClient) return;   // desktop-only; no remote entry points exist, but be defensive
+    history.pushState({ view: 'onboard' }, '');
+    document.getElementById('onboardOverlay').classList.remove('hidden');
+    // Always start at step 1 (what this does). The flow never auto-skips: an already-enabled
+    // firewall is shown as a ✓ on step 2 rather than jumping silently to the QR.
+    _showOnboardStep(1);
+  };
+
+  // Pure hide -- history is unwound by the caller (close button / backdrop / Done call
+  // history.back(), which fires popstate). Safe to call when already hidden.
+  function closeOnboarding() {
+    document.getElementById('onboardOverlay').classList.add('hidden');
+    // When the wizard completed phone-access setup, auto-dismiss the home hint card so it
+    // vanishes immediately and stays gone on reload (no manual X needed after a successful wizard).
+    // dismissHint re-renders home as part of its optimistic update, so skip the standalone
+    // render() call in that branch. If the wizard was closed without completing, render as before.
+    if (_onboard.firewallDone) dismissHint('phone-access');
+    else if (lastData) render(lastData);
+    applyPhoneAccessSlot();
+  }
+  window.closeOnboarding = closeOnboarding;
+
+  function _showOnboardStep(n) {
+    [1, 2, 3].forEach(s =>
+      document.getElementById('onboardStep' + s).classList.toggle('hidden', s !== n));
+    document.querySelectorAll('.onboard-dot').forEach(d =>
+      d.classList.toggle('active', parseInt(d.dataset.step, 10) === n));
+    if (n === 2) _renderStep2State();
+    if (n === 3) _renderOnboardQr();
+  }
+  window._showOnboardStep = _showOnboardStep;   // referenced by the Continue button's onclick
+
+  // Step 2 adapts to the live firewall state: enable UI when the port is closed, a clear ✓
+  // confirmation + Continue when it's already open. Either way the state is VISIBLE, not skipped.
+  function _renderStep2State() {
+    const on = _onboard.firewallDone;
+    document.getElementById('onboardStep2Icon').innerHTML = on ? '&#9989;' : '&#128274;';
+    document.getElementById('onboardStep2Title').textContent = on ? 'Phone access is on' : 'Allow phone access';
+    document.getElementById('onboardStep2Text').innerHTML = on
+      ? '&#10003; Firewall already open on port 5005 &mdash; phone access is on. Your phone can reach this PC over the same Wi-Fi.'
+      : 'Open port 5005 in Windows Firewall below. You\'ll see a Windows permission prompt &mdash; approve it to continue.';
+    document.getElementById('onboardEnableBtn').classList.toggle('hidden', on);
+    document.getElementById('onboardContinueBtn').classList.toggle('hidden', !on);
+    document.getElementById('onboardEnableStatus').textContent = '';
+  }
+
+  // Step 1 -> 2. Never skips: step 2 itself shows the ✓ state when already enabled.
+  window.onboardGoEnable = function() {
+    _showOnboardStep(2);
+  };
+
+  // Step 2: reuse the existing firewall-enable endpoint (single consent, never auto-opened).
+  window.onboardEnable = async function() {
+    const btn    = document.getElementById('onboardEnableBtn');
+    const status = document.getElementById('onboardEnableStatus');
+    btn.disabled = true;
+    status.style.color = 'var(--muted)';
+    status.textContent = 'Requesting permission…';
+    try {
+      const r = await fetch('/api/firewall/enable', { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const result = await r.json();
+      if (result.status === 'added' || result.status === 'already_exists') {
+        _onboard.firewallDone = true;
+        status.style.color = 'var(--green)';
+        status.textContent = 'Enabled!';
+        applyPhoneAccessSlot();   // keep the Settings top slot in sync from the wizard's enable step
+        setTimeout(() => _showOnboardStep(3), 500);
+      } else if (result.status === 'declined') {
+        status.style.color = 'var(--red)';
+        status.textContent = 'Permission declined. Tap above to try again.';
+        btn.disabled = false;
+      } else {
+        status.style.color = 'var(--red)';
+        status.textContent = 'Could not enable — needs a Windows admin account to open the firewall port.';
+        btn.disabled = false;
+      }
+    } catch (e) {
+      status.style.color = 'var(--red)';
+      status.textContent = 'Something went wrong. Tap above to try again.';
+      btn.disabled = false;
+    }
+  };
+
+  // Step 3: show the QR for the auto-selected adapter (the server's smart pick: gatewayed LAN,
+  // tether/VBox excluded). The adapter picker stays hidden behind a link unless the phone can't
+  // connect -- the default path is clean.
+  async function _renderOnboardQr() {
+    const urlEl = document.getElementById('onboardUrl');
+    document.getElementById('onboardQr').innerHTML = '';
+    urlEl.textContent = '';
+    // Reset the picker affordance each time the step is shown: link visible, dropdown hidden.
+    document.getElementById('onboardAdapterReveal').classList.remove('hidden');
+    document.getElementById('onboardAdapterPicker').classList.add('hidden');
+    try {
+      const r = await fetch('/api/network-info');
+      const info = r.ok ? await r.json() : null;
+      if (info && info.lanIp) {
+        _onboardPort = info.port || 5005;
+        _onboardQrFor(info.lanIp);
+      } else {
+        urlEl.textContent = 'No LAN address found — connect this PC to Wi-Fi.';
+      }
+    } catch (e) {
+      urlEl.textContent = 'Could not load the address.';
+    }
+  }
+
+  // Render the wizard QR + URL for a specific LAN IP (auto pick or a picker choice).
+  function _onboardQrFor(ip) {
+    const url = 'http://' + ip + ':' + _onboardPort;
+    document.getElementById('onboardUrl').textContent = url;
+    const qrEl = document.getElementById('onboardQr');
+    qrEl.innerHTML = '';
+    if (typeof QRCode !== 'undefined') {
+      new QRCode(qrEl, { text: url, width: 160, height: 160,
+        colorDark: '#dde1f0', colorLight: '#1b1b30' });
+    }
+  }
+
+  // "Phone can't connect? Choose a different network" -- reveal the adapter picker inline.
+  window.onboardRevealAdapters = async function() {
+    document.getElementById('onboardAdapterReveal').classList.add('hidden');
+    const sel = document.getElementById('onboardAdapterPicker');
+    try {
+      const r = await fetch('/api/adapters');
+      if (r.ok) {
+        _onboardAdapters = await r.json();
+        sel.innerHTML = '<option value="">Auto (best guess)</option>'
+          + _onboardAdapters.map(c =>
+              '<option value="' + c.name + '"' + (c.isAutoSelected ? ' selected' : '') + '>'
+              + c.label + '</option>').join('');
+      }
+    } catch (e) { /* leave the default Auto option */ }
+    sel.classList.remove('hidden');
+  };
+
+  // Changing the wizard picker regenerates the QR for the chosen adapter (empty = auto).
+  window.onboardAdapterPick = function(name) {
+    const cand = name
+      ? _onboardAdapters.find(c => c.name === name)
+      : (_onboardAdapters.find(c => c.isAutoSelected) || _onboardAdapters[0]);
+    if (cand) _onboardQrFor(cand.ip);
+  };
+
+  // Load persisted onboarding/hint state, then auto-show the flow once on first run.
+  // Desktop-only: a remote browser gets no onboarding state load and no first-run auto-show.
+  async function initOnboarding() {
+    if (!_isLocalClient) return;
+    try {
+      const r = await fetch('/api/settings');
+      if (r.ok) {
+        const s = await r.json();
+        _onboard.seen         = !!s.seenPhoneOnboarding;
+        _onboard.firewallDone = !!s.firewallSetupDone;
+        _dismissedHints = {};
+        (s.dismissedHints || []).forEach(id => { _dismissedHints[id] = true; });
+      }
+    } catch (e) { /* leave defaults; flow still reachable from Settings */ }
+    if (lastData) render(lastData);   // inject hint card now that dismissed-state is known
+    if (!_onboard.seen) {
+      // Persist "seen" up front so it never auto-shows again, even if the user closes immediately.
+      fetch('/api/onboarding/seen', { method: 'POST' }).catch(function() {});
+      _onboard.seen = true;
+      openOnboarding();
+    }
+  }
+  // On a remote browser, hide the phone-access settings section immediately (the #phoneSetupCard
+  // defaults to visible) so it never flashes before Settings is opened. applyPhoneAccessSlot keeps
+  // it hidden thereafter.
+  if (!_isLocalClient) {
+    document.getElementById('phoneSetupCard').classList.add('hidden');
+    document.getElementById('lanPanel').classList.add('hidden');
+  }
+  initOnboarding();
+
+  // ---- Reset / clear data ----
+  // Independent checkboxes -> a confirm step -> POST /api/reset. Only ticked items are cleared;
+  // usage logs are off by default and need a second explicit tick. After clearing, the server
+  // closes (default) or restarts the app, so this client simply reports and lets the connection drop.
+
+  const _RESET_ITEMS = [
+    { id: 'resetSettings',   key: 'settings',   label: 'Settings & preferences' },
+    { id: 'resetOnboarding', key: 'onboarding', label: 'Onboarding state' },
+    { id: 'resetWebview2',   key: 'webView2',   label: 'Browser cache (WebView2)' },
+    { id: 'resetAutostart',  key: 'autostart',  label: 'Start-with-Windows entry' },
+    { id: 'resetFirewall',   key: 'firewall',   label: 'Firewall rule' },
+    { id: 'resetUsageLogs',  key: 'usageLogs',  label: 'Usage logs', danger: true },
+  ];
+
+  window.openReset = async function() {
+    history.pushState({ view: 'reset' }, '');
+    document.getElementById('resetOverlay').classList.remove('hidden');
+    // Safe default: every box unchecked each time it opens.
+    ['resetSettings','resetOnboarding','resetWebview2','resetAutostart','resetFirewall',
+     'resetUsageLogs','resetRestart','resetUsageConfirm'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.checked = false;
+    });
+    _resetShowSelectStep();
+    _syncResetContinueBtn();
+    // Label the firewall row with the real port.
+    try {
+      const r = await fetch('/api/settings');
+      if (r.ok) {
+        const s = await r.json();
+        document.getElementById('resetFirewallNote').textContent =
+          'Closes the phone-access port (' + (s.serverPort || 5005) + '). Needs a Windows admin prompt.';
+      }
+    } catch (e) { /* keep the default label */ }
+  };
+
+  // Pure hide -- history is unwound by the caller (close button / backdrop call history.back()).
+  function closeReset() {
+    document.getElementById('resetOverlay').classList.add('hidden');
+  }
+  window.closeReset = closeReset;
+
+  function _resetShowSelectStep() {
+    document.getElementById('resetSelectStep').classList.remove('hidden');
+    document.getElementById('resetConfirmStep').classList.add('hidden');
+  }
+  window.resetBackToSelect = _resetShowSelectStep;
+
+  function _resetAnyTicked() {
+    return _RESET_ITEMS.some(it => document.getElementById(it.id).checked);
+  }
+
+  function _syncResetContinueBtn() {
+    document.getElementById('resetContinueBtn').disabled = !_resetAnyTicked();
+  }
+  window._syncResetContinueBtn = _syncResetContinueBtn;
+
+  // Enable the destructive button only once the extra usage-logs confirmation is ticked (if shown).
+  function _syncResetExecBtn() {
+    const usage = document.getElementById('resetUsageLogs').checked;
+    const confirmed = document.getElementById('resetUsageConfirm').checked;
+    document.getElementById('resetExecBtn').disabled = usage && !confirmed;
+  }
+  window._syncResetExecBtn = _syncResetExecBtn;
+
+  window.resetContinue = function() {
+    if (!_resetAnyTicked()) return;
+    document.getElementById('resetSummary').innerHTML = _RESET_ITEMS
+      .filter(it => document.getElementById(it.id).checked)
+      .map(it => '<li' + (it.danger ? ' class="danger"' : '') + '>' + it.label
+               + (it.danger ? ' &mdash; you\'ll lose your usage history' : '') + '</li>')
+      .join('');
+    const usage = document.getElementById('resetUsageLogs').checked;
+    document.getElementById('resetUsageWarn').classList.toggle('hidden', !usage);
+    document.getElementById('resetUsageConfirm').checked = false;
+    document.getElementById('resetExecBtn').textContent =
+      document.getElementById('resetRestart').checked ? 'Clear & restart' : 'Clear & close';
+    document.getElementById('resetExecMsg').textContent = '';
+    _syncResetExecBtn();
+    document.getElementById('resetSelectStep').classList.add('hidden');
+    document.getElementById('resetConfirmStep').classList.remove('hidden');
+  };
+
+  window.resetExecute = async function() {
+    const btn = document.getElementById('resetExecBtn');
+    const msg = document.getElementById('resetExecMsg');
+    btn.disabled = true;
+    msg.style.color = 'var(--muted)';
+    msg.textContent = 'Clearing… (a Windows admin prompt may appear for the firewall rule)';
+    const body = {};
+    _RESET_ITEMS.forEach(it => { body[it.key] = document.getElementById(it.id).checked; });
+    body.restart = document.getElementById('resetRestart').checked;
+    try {
+      const r = await fetch('/api/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const res = await r.json();
+      const failNote = (res.failed && res.failed.length)
+        ? ' Some items could not be cleared: ' + res.failed.join('; ') + '.'
+        : '';
+      msg.style.color = (res.failed && res.failed.length) ? 'var(--yellow)' : 'var(--green)';
+      msg.textContent = (res.willRestart ? 'Cleared. Restarting the app…' : 'Cleared. Closing the app…') + failNote;
+    } catch (e) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Reset failed — nothing was changed that could be reported.';
+      btn.disabled = false;
+    }
+  };
 
   // ---- Stats ----
 
@@ -2008,32 +2673,42 @@
       _thresholds.yellow      = yt;
       _thresholds.yellowGreen = gt;
 
-      // Firewall status
-      const statusEl = document.getElementById('firewallStatus');
-      const btnEl    = document.getElementById('firewallBtn');
-      if (s.firewallSetupDone) {
-        statusEl.textContent = 'Enabled (port ' + s.serverPort + ')';
-        btnEl.style.display  = 'none';
-      } else if (s.firewallDeclined) {
-        statusEl.textContent = 'Not enabled (previously declined)';
-        btnEl.textContent    = 'Enable';
-        btnEl.style.display  = '';
-        btnEl.disabled       = false;
-      } else {
-        statusEl.textContent = 'Not enabled';
-        btnEl.textContent    = 'Enable';
-        btnEl.style.display  = '';
-        btnEl.disabled       = false;
-      }
+      // Keep the shared in-memory firewall flag in sync with persisted state. The top slot
+      // (applyPhoneAccessSlot, below) renders the actual phone-access UI from this; there is no
+      // longer a separate inline status row.
+      _onboard.firewallDone = !!s.firewallSetupDone;
     } catch (e) {
       const msg = document.getElementById('saveMsg');
       msg.style.color = 'var(--red)';
       msg.textContent = 'Failed to load settings.';
     }
 
-    await loadNetworkInfo();
-    await loadAdapters(_loadedPreferredAdapter);
+    await applyPhoneAccessSlot();
   }
+
+  // Single source of truth for the Settings phone-access top slot, so every path stays in sync.
+  // Set-up -> hide the guided-setup card and show the QR panel (LAN address + QR + the openly-
+  // visible adapter picker) up top. Not-set-up -> show the set-up card and hide the QR, so it
+  // never points at a refused connection. Called from loadSettings (page load), the inline
+  // enable/disable toggle, and wizard completion (enable step + Done) -- the three can't drift.
+  async function applyPhoneAccessSlot() {
+    // Remote browser: hide the ENTIRE phone-access settings section (set-up card + QR panel).
+    // Pointless on the phone, which is already connected. The rest of Settings stays working.
+    if (!_isLocalClient) {
+      document.getElementById('phoneSetupCard').classList.add('hidden');
+      document.getElementById('lanPanel').classList.add('hidden');
+      return;
+    }
+    if (_onboard.firewallDone) {
+      document.getElementById('phoneSetupCard').classList.add('hidden');
+      await loadNetworkInfo();
+      await loadAdapters(_loadedPreferredAdapter);
+    } else {
+      document.getElementById('phoneSetupCard').classList.remove('hidden');
+      document.getElementById('lanPanel').classList.add('hidden');
+    }
+  }
+  window.applyPhoneAccessSlot = applyPhoneAccessSlot;
 
   async function saveSettings() {
     const btn = document.getElementById('saveBtn');
@@ -2162,31 +2837,6 @@
       }
     } catch (e) {
       document.getElementById('lanPanel').classList.add('hidden');
-    }
-  }
-
-  async function enablePhoneAccess() {
-    const btn      = document.getElementById('firewallBtn');
-    const statusEl = document.getElementById('firewallStatus');
-    btn.disabled   = true;
-    statusEl.textContent = 'Requesting permission...';
-    try {
-      const r = await fetch('/api/firewall/enable', { method: 'POST' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const result = await r.json();
-      if (result.status === 'added' || result.status === 'already_exists') {
-        statusEl.textContent = 'Enabled';
-        btn.style.display    = 'none';
-      } else if (result.status === 'declined') {
-        statusEl.textContent = 'Not enabled (declined)';
-        btn.disabled = false;
-      } else {
-        statusEl.textContent = 'Not enabled - requires a Windows admin account to open the firewall port';
-        btn.disabled = false;
-      }
-    } catch (e) {
-      statusEl.textContent = 'Not enabled (error)';
-      btn.disabled = false;
     }
   }
 
