@@ -330,41 +330,59 @@
     .update-banner a:hover { text-decoration: underline; }
 
     /* Backoff status banner -- visible while polling is backed off */
+    /* Calm auth/connection banner. Default tone is a quiet info strip (no alarm
+       colours); the "action" modifier adds a gentle amber accent for the one case
+       that needs the user to do something. All backoff internals live behind the
+       "What's this?" explainer, never on the surface. */
     .backoff-banner {
       flex-shrink: 0;
-      background: #1e0e04;
-      border-bottom: 2px solid #7c3500;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
       padding: 8px 16px 9px;
+    }
+    .backoff-banner.backoff-action {
+      border-left-color: var(--yellow);
     }
     .backoff-banner-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 2px;
+      gap: 12px;
     }
     .backoff-banner-title {
       font-size: 0.80rem;
-      font-weight: 700;
-      color: #fb923c;
-    }
-    .backoff-banner-fails {
-      font-size: 0.68rem;
-      color: var(--muted);
-    }
-    .backoff-banner-next {
-      font-size: 0.75rem;
-      font-variant-numeric: tabular-nums;
+      font-weight: 600;
       color: var(--text);
-      margin-bottom: 2px;
     }
-    .backoff-banner-mult {
-      font-size: 0.65rem;
+    /* "What's this?" affordance -- a quiet inline link, not a button-looking thing */
+    .backoff-whatsthis {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      font-size: 0.70rem;
+      color: var(--accent);
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      white-space: nowrap;
+    }
+    .backoff-whatsthis:hover { opacity: 0.82; }
+    /* Inline expanding explanation -- plain language, the ONLY place any detail lives */
+    .backoff-explain {
+      font-size: 0.72rem;
+      line-height: 1.45;
       color: var(--dim);
+      margin-top: 6px;
+      max-width: 60ch;
     }
+    .backoff-explain strong { color: var(--text); font-weight: 600; }
     .backoff-stale-info {
       font-size: 0.65rem;
       color: var(--muted);
-      margin-top: 3px;
+      margin-top: 5px;
     }
 
     /* Rounding-ambiguity warning: shown on weekly card only, late in period near the cap */
@@ -953,11 +971,10 @@
 
 <div id="backoffBanner" class="backoff-banner hidden">
   <div class="backoff-banner-head">
-    <span class="backoff-banner-title" id="backoffTitle">Rate-limited — backing off</span>
-    <span class="backoff-banner-fails" id="backoffFails"></span>
+    <span class="backoff-banner-title" id="backoffTitle"></span>
+    <button type="button" class="backoff-whatsthis" id="backoffWhatsThis" onclick="toggleBackoffExplain()">What&rsquo;s this?</button>
   </div>
-  <div class="backoff-banner-next" id="backoffNext"></div>
-  <div class="backoff-banner-mult">Doubling each failure (&times;2) &mdash; interval resets on next success</div>
+  <div class="backoff-explain hidden" id="backoffExplain"></div>
   <div class="backoff-stale-info hidden" id="backoffStaleInfo"></div>
 </div>
 
@@ -1693,26 +1710,94 @@
 
   // ---- Backoff status banner ----
 
-  function _backoffTypeLabel(t) {
-    if (t === 'rate_limit') return 'Rate-limited';
-    if (t === 'auth')       return 'Auth error';
-    return 'Error';
+  // Map the raw auth/cooldown state to CALM, plain-language banner content. No "token",
+  // "OAuth", "429", "backoff", "×2" or interval numbers ever reach the surface — those
+  // internals are gone; the explainer only ever speaks of the Claude "login". Three cases,
+  // chosen from the errorType the poller already tracks (+ failure count for the auth ramp):
+  //   refresh_rate_limited / rate_limit -> waiting on Claude Code to refresh the login (auto)
+  //   auth, first few misses            -> login briefly lapsed, reconnecting (auto)
+  //   auth, persistent  (or 'other')    -> login expired, needs the user to sign in again
+  const AUTH_RECONNECT_GRACE = 2;   // first couple of auth misses are treated as transient
+
+  function _authBannerContent() {
+    const s = _backoffState || {};
+    const t = s.errorType;
+
+    // RATE-LIMITED — the app deliberately paused and is waiting for Claude Code to refresh
+    // the login. Recovers on its own; nothing for the user to do.
+    if (t === 'refresh_rate_limited' || t === 'rate_limit') {
+      return {
+        action: false,
+        title: 'Waiting on Claude Code to refresh the login',
+        explain:
+            'Claude Code refreshes your sign-in from time to time. To stay out of its way, '
+          + 'Claude Usage has paused for a moment and is waiting for that to happen. '
+          + '<strong>There’s nothing you need to do</strong> — it reconnects on its own and '
+          + 'your numbers update automatically. The figures below are the last ones it saw.',
+      };
+    }
+
+    // LAPSED, likely automatic — a brief loss of the sign-in; give it a chance to come back.
+    if (t === 'auth' && (s.consecutiveFailures || 0) <= AUTH_RECONNECT_GRACE) {
+      return {
+        action: false,
+        title: 'Reconnecting to Claude…',
+        explain:
+            'Claude Usage reads the same Claude sign-in that Claude Code uses on this PC. It '
+          + 'briefly lost that sign-in and is reconnecting. '
+          + '<strong>This usually clears on its own in a moment.</strong> Your numbers are paused '
+          + '(shown dimmed) until it does.',
+      };
+    }
+
+    // LAPSED, needs action — the sign-in has expired and won't return without the user. Tell
+    // them plainly what happened, how it affects them, what to DO, and why the app needs it.
+    if (t === 'auth') {
+      return {
+        action: true,
+        title: 'Can’t reach your usage — Claude login expired',
+        explain:
+            '<strong>What happened:</strong> the Claude sign-in saved on this PC has expired, so '
+          + 'Claude Usage can’t fetch fresh numbers. The figures below are paused and shown '
+          + 'dimmed.<br><br>'
+          + '<strong>What to do:</strong> open Claude Code (or run any <em>claude</em> command) to '
+          + 'sign in again. Claude Usage picks the refreshed sign-in up automatically — no '
+          + 'restart needed.<br><br>'
+          + '<strong>Why it needs this:</strong> Claude Usage reads the same Claude sign-in already '
+          + 'on your PC to look up your usage. It never sees your password, and nothing leaves this '
+          + 'computer.',
+      };
+    }
+
+    // Fallback (errorType 'other' / unknown) — keep it reassuring and correct.
+    return {
+      action: false,
+      title: 'Reconnecting to Claude…',
+      explain:
+          'Claude Usage hit a snag reaching your usage and is trying again. '
+        + '<strong>This usually clears on its own.</strong> The numbers below are the last ones it '
+        + 'saw, shown dimmed until it reconnects.',
+    };
   }
 
-  // The token endpoint is rate-limiting our OWN refresh; the app is waiting to adopt a token
-  // the host Claude Code refreshes on disk. This is a calm waiting state, not a failure ramp,
-  // so it gets a plain message and hides the consecutive-failure / "×2 doubling" backoff noise.
-  function _isRefreshRateLimited() {
-    return _backoffState && _backoffState.errorType === 'refresh_rate_limited';
-  }
+  let _explainOpen   = false;
+  let _lastBannerKey = null;   // so the 1s tick doesn't clobber the open explainer's text
 
-  function _fmtBackoffCountdown(nextAttemptAt) {
-    const ms = new Date(nextAttemptAt) - Date.now();
-    if (ms <= 0) return 'retrying now…';
-    const totalSec = Math.ceil(ms / 1000);
-    const m = Math.floor(totalSec / 60);
-    const s = totalSec % 60;
-    return (m > 0 ? m + 'm ' : '') + s + 's';
+  function toggleBackoffExplain() {
+    _explainOpen = !_explainOpen;
+    const ex  = document.getElementById('backoffExplain');
+    const btn = document.getElementById('backoffWhatsThis');
+    if (ex)  ex.classList.toggle('hidden', !_explainOpen);
+    if (btn) btn.textContent = _explainOpen ? 'Hide' : 'What’s this?';
+  }
+  window.toggleBackoffExplain = toggleBackoffExplain;
+
+  function _collapseBackoffExplain() {
+    _explainOpen = false;
+    const ex  = document.getElementById('backoffExplain');
+    if (ex)  ex.classList.add('hidden');
+    const btn = document.getElementById('backoffWhatsThis');
+    if (btn) btn.textContent = 'What’s this?';
   }
 
   function updateBackoffBanner() {
@@ -1721,12 +1806,18 @@
     const mv = document.getElementById('mainView');
     if (!_backoffState) {
       banner.classList.add('hidden');
+      banner.classList.remove('backoff-action');
       if (si) si.classList.add('hidden');
       if (mv) mv.classList.remove('stale-mode');
+      _collapseBackoffExplain();
+      _lastBannerKey = null;
       return;
     }
     banner.classList.remove('hidden');
-    // If we have cached good data and the view is blank or still loading, render it dimmed.
+
+    // Keep the dimmed last-known data + "stale — last updated HH:MM" visible underneath
+    // (unchanged behaviour). If we have cached good data and the view is blank or still
+    // loading, render it dimmed.
     if (_lastGoodData && mv && (!lastData || mv.querySelector('.loading'))) {
       render(_lastGoodData);
     }
@@ -1738,28 +1829,25 @@
         si.classList.remove('hidden');
       }
     } else if (!lastData) {
-      // No cache at all — clear loading so the backoff banner is the sole indicator.
+      // No cache at all — clear loading so the banner is the sole indicator.
       if (mv && mv.querySelector('.loading')) mv.innerHTML = '';
+      if (si) si.classList.add('hidden');
     }
-    const multEl = banner.querySelector('.backoff-banner-mult');
-    if (_isRefreshRateLimited()) {
-      // Calm waiting state: no failure count, no doubling-interval line.
-      document.getElementById('backoffTitle').textContent = 'Token endpoint rate-limited';
-      document.getElementById('backoffFails').textContent = '';
-      const countdown = _fmtBackoffCountdown(_backoffState.nextAttemptAt);
-      document.getElementById('backoffNext').textContent =
-        'Waiting on Claude Code to refresh the token  \xb7  re-checking in ' + countdown;
-      if (multEl) multEl.classList.add('hidden');
-      return;
+
+    // Calm, cause-adapted surface text. Only rebuild when the case actually changes, so the
+    // per-second tick can't interrupt reading/selecting the open explainer.
+    const c = _authBannerContent();
+    const key = c.title + '|' + (c.action ? 'a' : 'c');
+    if (key !== _lastBannerKey) {
+      _lastBannerKey = key;
+      banner.classList.toggle('backoff-action', !!c.action);
+      document.getElementById('backoffTitle').textContent = c.title;
+      const ex = document.getElementById('backoffExplain');
+      if (ex) {
+        ex.innerHTML = c.explain;
+        ex.classList.toggle('hidden', !_explainOpen);
+      }
     }
-    if (multEl) multEl.classList.remove('hidden');
-    const typeStr = _backoffTypeLabel(_backoffState.errorType);
-    document.getElementById('backoffTitle').textContent = typeStr + ' — backing off';
-    const n = _backoffState.consecutiveFailures;
-    document.getElementById('backoffFails').textContent = n + ' consecutive failure' + (n === 1 ? '' : 's');
-    const countdown = _fmtBackoffCountdown(_backoffState.nextAttemptAt);
-    document.getElementById('backoffNext').textContent =
-      'Next attempt in ' + countdown + '  \xb7  interval ' + _backoffState.intervalSeconds + 's';
   }
 
   setInterval(function() { if (_backoffState) updateBackoffBanner(); }, 1000);
