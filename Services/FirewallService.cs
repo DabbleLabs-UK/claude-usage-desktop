@@ -64,4 +64,37 @@ public sealed class FirewallService
             return FirewallResult.Error;
         }
     }
+
+    // Elevates via UAC to REMOVE the inbound rule for the given port (inverse of TryAddRuleAsync,
+    // reusing the same runas elevation). Returns Added when the rule is gone (removed, or already
+    // absent — no prompt is raised in that case), Declined on a UAC refusal, Error otherwise.
+    public async Task<FirewallResult> TryRemoveRuleAsync(int port)
+    {
+        try
+        {
+            if (!RuleExists(port)) return FirewallResult.Added; // nothing to remove; skip elevation
+
+            var cmd = $"Remove-NetFirewallRule -Name '{RulePrefix}{port}' -ErrorAction SilentlyContinue";
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NonInteractive -WindowStyle Hidden -Command \"{cmd}\"",
+                UseShellExecute = true,
+                Verb = "runas",
+            };
+            using var p = Process.Start(psi);
+            if (p is null) return FirewallResult.Error;
+            await p.WaitForExitAsync();
+            return p.ExitCode == 0 ? FirewallResult.Added : FirewallResult.Error;
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            return FirewallResult.Declined;
+        }
+        catch
+        {
+            return FirewallResult.Error;
+        }
+    }
 }

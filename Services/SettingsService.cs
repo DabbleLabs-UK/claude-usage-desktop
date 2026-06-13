@@ -53,20 +53,27 @@ public sealed class SettingsService
 
     private static void ApplyAutostart(bool enable)
     {
+        if (!enable) { RemoveAutostart(); return; }
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKey, true);
             if (key is null) return;
-            if (enable)
-            {
-                var exePath = Environment.ProcessPath;
-                if (exePath is null) return;
-                key.SetValue(RunValueName, $"\"{exePath}\"");
-            }
-            else
-            {
-                key.DeleteValue(RunValueName, throwOnMissingValue: false);
-            }
+            var exePath = Environment.ProcessPath;
+            if (exePath is null) return;
+            key.SetValue(RunValueName, $"\"{exePath}\"");
+        }
+        catch { }
+    }
+
+    // Remove the HKCU Run autostart entry. Single source of truth for deleting the registry value,
+    // shared by the disable path of ApplyAutostart (driven by the in-app reset via Save) and by the
+    // headless --uninstall-cleanup path (UninstallCleanup), so the two can't target different keys.
+    public static void RemoveAutostart()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKey, true);
+            key?.DeleteValue(RunValueName, throwOnMissingValue: false);
         }
         catch { }
     }

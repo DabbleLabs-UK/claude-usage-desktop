@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -21,6 +22,14 @@ public partial class App : Application
     private static readonly string InstanceId = Guid.NewGuid().ToString("N");
 
     private static Mutex? _singleInstanceMutex;
+
+    // Single-instance "focus existing": the PRIMARY instance creates and waits on this named
+    // event; a second launch opens it and Set()s it (asking the primary to surface its window),
+    // then exits cleanly. Pure-.NET cross-process signal -- no window-message P/Invoke needed.
+    private const string ShowEventName = "Local\\ClaudeUsage_ShowInstance_v1";
+    private EventWaitHandle? _showInstanceEvent;
+    private RegisteredWaitHandle? _showWaitRegistration;
+
     private IHost? _host;
     private WinForms.NotifyIcon? _notifyIcon;
     private MainWindow? _mainWindow;
@@ -37,8 +46,11 @@ public partial class App : Application
         _singleInstanceMutex = new Mutex(true, "Local\\ClaudeUsage_SingleInstance_v1", out bool createdNew);
         if (!createdNew)
         {
+            // Already running. Don't start a duplicate -- instead ask the running instance to
+            // surface its window so the user gets visible feedback, then exit cleanly.
             _singleInstanceMutex.Dispose();
             _singleInstanceMutex = null;
+            SignalExistingInstance();
             Current.Shutdown();
             return;
         }
@@ -46,10 +58,21 @@ public partial class App : Application
         base.OnStartup(e);
         WinForms.Application.EnableVisualStyles();
 
-        SettingsService = new SettingsService();
-        _firewallService = new FirewallService();
-        _host = BuildWebApp();
-        await _host.StartAsync();
+        try
+        {
+            SettingsService = new SettingsService();
+            _firewallService = new FirewallService();
+            _host = BuildWebApp();
+            await _host.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            // Genuine can't-start (most commonly the port is already bound by another program).
+            // Surface a clear message + log it instead of dying silently, then exit.
+            ReportFatalStartupError(ex);
+            Shutdown();
+            return;
+        }
 
         InitTrayIcon();
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
@@ -57,12 +80,18 @@ public partial class App : Application
         _mainWindow = new MainWindow();
         _mainWindow.Show();
 
+        // Listen for second-launch pings only once the window exists, so a ping always has a
+        // window to surface (and we never race-create a duplicate window during slow startup).
+        RegisterShowInstanceListener();
+
         _ = Task.Run(CheckFirewallOnStartupAsync);
     }
 
     protected override async void OnExit(ExitEventArgs e)
     {
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        _showWaitRegistration?.Unregister(null);
+        _showInstanceEvent?.Dispose();
         _notifyIcon?.Dispose();
         if (_host is not null)
         {
@@ -86,15 +115,87 @@ public partial class App : Application
     {
         if (_mainWindow is null || !_mainWindow.IsLoaded)
         {
+            // Window was fully closed (not just hidden-to-tray) -- recreate it.
             _mainWindow = new MainWindow();
             _mainWindow.Show();
         }
         else
         {
-            if (!_mainWindow.IsVisible) _mainWindow.Show();
-            _mainWindow.WindowState = WindowState.Normal;
-            _mainWindow.Activate();
+            if (!_mainWindow.IsVisible) _mainWindow.Show();           // surface from tray (Hide())
+            if (_mainWindow.WindowState == WindowState.Minimized)
+                _mainWindow.WindowState = WindowState.Normal;         // un-minimise
         }
+
+        _mainWindow.Activate();
+        // Foreground-stealing prevention can swallow Activate() when the request originates from
+        // another process. Briefly flash Topmost to force the window forward, then clear it so it
+        // does not actually stay always-on-top.
+        _mainWindow.Topmost = true;
+        _mainWindow.Topmost = false;
+        _mainWindow.Focus();
+    }
+
+    // Second-instance path: open the primary's named event and signal it to surface its window.
+    // Best-effort -- if the event isn't there yet (primary still starting) we simply exit, which
+    // is the old silent behaviour for that narrow window only.
+    private static void SignalExistingInstance()
+    {
+        try
+        {
+            if (EventWaitHandle.TryOpenExisting(ShowEventName, out var ev))
+                using (ev) ev.Set();
+        }
+        catch { /* signalling must never prevent the second process from exiting cleanly */ }
+    }
+
+    // Primary-instance path: create the named event and register a wait that, whenever a second
+    // launch sets it, marshals to the UI thread and surfaces the window. AutoReset re-arms after
+    // each ping; the registration is torn down in OnExit.
+    private void RegisterShowInstanceListener()
+    {
+        try
+        {
+            _showInstanceEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+            _showWaitRegistration = ThreadPool.RegisterWaitForSingleObject(
+                _showInstanceEvent,
+                (_, _) => Dispatcher.BeginInvoke(new Action(ShowMainWindow)),
+                state: null,
+                millisecondsTimeOutInterval: Timeout.Infinite,
+                executeOnlyOnce: false);
+        }
+        catch
+        {
+            // If this fails the app still runs single-instance; it just won't focus-existing.
+        }
+    }
+
+    // Clear, logged exit when the app genuinely can't start (e.g. the port is already bound by
+    // another program -- a second copy of THIS app is caught earlier by the mutex). Writes a
+    // durable line (ILogger has no providers in Release) and shows a message box.
+    private void ReportFatalStartupError(Exception ex)
+    {
+        var port = SettingsService?.Current.ServerPort.ToString() ?? "the configured port";
+        try
+        {
+            var path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ClaudeUsage", "startup-error.log");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.AppendAllText(path, $"{DateTimeOffset.UtcNow:o}  STARTUP FAILED (port {port}): {ex}\n");
+        }
+        catch { /* logging is best-effort */ }
+
+        try
+        {
+            WinForms.MessageBox.Show(
+                $"Claude Usage couldn't start.\n\n{ex.Message}\n\n" +
+                $"This usually means port {port} is already in use by another program. " +
+                "Close that program (or change the port in Settings) and try again.",
+                "Claude Usage",
+                WinForms.MessageBoxButtons.OK,
+                WinForms.MessageBoxIcon.Error);
+        }
+        catch { /* headless / no desktop: the log line above is the record */ }
     }
 
     public void ShowSettingsView()
@@ -190,8 +291,12 @@ public partial class App : Application
 
         if (_firewallService.RuleExists(port))
         {
-            if (!settings.FirewallSetupDone)
-                SettingsService.Save(settings with { FirewallSetupDone = true });
+            // Only records that the port is open. Save from Current (not the stale snapshot) and
+            // touch ONLY the firewall flag, so a concurrent onboarding write (e.g. a reset clearing
+            // SeenPhoneOnboarding) is never clobbered. "Port is open" and "user has seen the intro"
+            // are independent facts -- this must not resurrect onboarding state.
+            if (!SettingsService.Current.FirewallSetupDone)
+                SettingsService.Save(SettingsService.Current with { FirewallSetupDone = true });
             return;
         }
 
@@ -341,6 +446,18 @@ public partial class App : Application
             {
                 var html = await File.ReadAllTextAsync(Path.Combine(wwwrootPath, "index.html"));
                 html = html.Replace("\"logo_dabblelabs.png\"", $"\"logo_dabblelabs.png?v={assetVer}\"");
+
+                // Discriminate the embedded desktop WebView2 (loads via localhost -> loopback
+                // remote IP) from a remote LAN browser (the phone, a non-loopback IP). Server-side
+                // and unspoofable. The page defaults the flag to false, so anything we can't prove
+                // local is treated as remote and the phone-access setup surface stays hidden.
+                var ip = ctx.Connection.RemoteIpAddress;
+                var isLocalClient = ip is not null
+                    && (System.Net.IPAddress.IsLoopback(ip)
+                        || (ip.IsIPv4MappedToIPv6 && System.Net.IPAddress.IsLoopback(ip.MapToIPv4())));
+                if (isLocalClient)
+                    html = html.Replace("window.__isLocalClient = false;", "window.__isLocalClient = true;");
+
                 ctx.Response.ContentType = "text/html; charset=utf-8";
                 ctx.Response.Headers["Cache-Control"] = "no-cache, must-revalidate";
                 ctx.Response.Headers["Pragma"] = "no-cache";
@@ -470,6 +587,178 @@ public partial class App : Application
             }
         });
 
+        // Persist that the guided phone-access onboarding has been shown, so first-run auto-show
+        // happens exactly once. Uses `Current with` to avoid clobbering any other settings field.
+        app.MapPost("/api/onboarding/seen", (SettingsService settings) =>
+        {
+            settings.Save(settings.Current with { SeenPhoneOnboarding = true });
+            return Results.Ok(new { ok = true });
+        });
+
+        // Permanently dismiss a hint card by id (generic — reusable for future hint cards).
+        // Appends to the persisted DismissedHints set; no-op if already present.
+        app.MapPost("/api/hints/dismiss", (HintDismissRequest body, SettingsService settings) =>
+        {
+            if (!string.IsNullOrWhiteSpace(body?.Id))
+            {
+                var dismissed = settings.Current.DismissedHints?.ToList() ?? new List<string>();
+                if (!dismissed.Contains(body.Id))
+                {
+                    dismissed.Add(body.Id);
+                    settings.Save(settings.Current with { DismissedHints = dismissed.ToArray() });
+                }
+            }
+            return Results.Ok(new { ok = true });
+        });
+
+        // Selective reset / clear-data. Only ticked categories are cleared; all-false is a no-op.
+        // The settings.json-backed categories (settings/onboarding/firewall flags/autostart) are
+        // merged into ONE Save() so they can't half-apply and so in-memory Current is updated --
+        // nothing rewrites the old values on exit. Locked-while-running data (WebView2 cache) is
+        // removed by a detached helper after this process exits; that same helper performs the
+        // optional restart (sidestepping the single-instance mutex). After responding, the app
+        // closes (default) or the helper relaunches it.
+        app.MapPost("/api/reset", async (ResetRequest req, SettingsService settings, FirewallService firewall) =>
+        {
+            var any = req.Settings || req.Onboarding || req.WebView2 || req.UsageLogs || req.Firewall || req.Autostart;
+            if (!any)
+                return Results.Ok(new { noop = true, cleared = Array.Empty<string>(), failed = Array.Empty<string>() });
+
+            var cleared = new List<string>();
+            var failed  = new List<string>();
+            string? firewallStatus = null;
+            var port = settings.Current.ServerPort;
+
+            // 1. Firewall rule (UAC elevation, inverse of the add path).
+            var firewallRemoved = false;
+            if (req.Firewall)
+            {
+                var res = await firewall.TryRemoveRuleAsync(port);
+                firewallStatus = res switch
+                {
+                    FirewallResult.Added    => "removed",
+                    FirewallResult.Declined => "declined",
+                    _                       => "error",
+                };
+                if (res == FirewallResult.Added) { firewallRemoved = true; cleared.Add($"Firewall rule (port {port})"); }
+                else failed.Add($"Firewall rule — {firewallStatus}");
+            }
+
+            // 2. Merge every settings.json-backed category into a single Save (also resets the
+            //    in-memory Current and applies the autostart-registry change).
+            var d = new AppSettings();
+            var s = settings.Current;
+            if (req.Settings)
+                s = s with
+                {
+                    ServerPort           = d.ServerPort,
+                    CloseToTray          = d.CloseToTray,
+                    OrangeThreshold      = d.OrangeThreshold,
+                    RedThreshold         = d.RedThreshold,
+                    YellowThreshold      = d.YellowThreshold,
+                    YellowGreenThreshold = d.YellowGreenThreshold,
+                    PreferredAdapterName = d.PreferredAdapterName,
+                };
+            if (req.Onboarding)
+                s = s with { SeenPhoneOnboarding = false, DismissedHints = null };
+            if (firewallRemoved)
+                // Mark not-set-up AND suppress the startup auto-re-add: CheckFirewallOnStartupAsync
+                // would otherwise re-elevate and reopen the port on the next launch. This is cleared
+                // the moment the user re-enables phone access.
+                s = s with { FirewallSetupDone = false, FirewallDeclined = true };
+            if (req.Autostart)
+                s = s with { StartWithWindows = false };
+
+            if (req.Settings || req.Onboarding || firewallRemoved || req.Autostart)
+            {
+                settings.Save(s); // persists cleared flags, updates Current, applies autostart removal
+                if (req.Settings)   cleared.Add("Settings & preferences");
+                if (req.Onboarding) cleared.Add("Onboarding state");
+                if (req.Autostart)  cleared.Add("Start-with-Windows entry");
+            }
+
+            // Diagnostic logs are app-generated throwaway state -- clear them with preferences so a
+            // "settings" reset really is fresh. Best-effort; these aren't surfaced as failures.
+            if (req.Settings)
+            {
+                Teardown.DeleteAppDataFile("auth-refresh.log", out _);
+                Teardown.DeleteAppDataFile("startup-error.log", out _);
+            }
+
+            // 3. Usage logs — JSONL files are opened per-write (not held), so they delete in-process.
+            if (req.UsageLogs)
+            {
+                if (Teardown.DeleteAppDataSubdir("usage-log", out var why)) cleared.Add("Usage logs");
+                else failed.Add($"Usage logs — {why}");
+            }
+
+            // 4. WebView2 cache — locked while running; try in-process, else defer to the exit helper.
+            var deferWebView2 = false;
+            if (req.WebView2)
+            {
+                var dir = Teardown.WebView2CacheDir();
+                if (dir is null || !Directory.Exists(dir)) cleared.Add("Browser cache");
+                else
+                {
+                    try { Directory.Delete(dir, true); cleared.Add("Browser cache"); }
+                    catch { deferWebView2 = true; cleared.Add("Browser cache (cleared after close)"); }
+                }
+            }
+
+            // 5. A detached helper clears the still-locked WebView2 cache and/or relaunches the app,
+            //    once this process has exited (files unlock, mutex frees).
+            if (deferWebView2 || req.Restart)
+                ScheduleExitHelper(deferWebView2 ? Teardown.WebView2CacheDir() : null, req.Restart);
+
+            // 6. Close (default) or restart shortly after responding, so the client can render first.
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(900);
+                await Dispatcher.InvokeAsync(() => Quit());
+            });
+
+            return Results.Ok(new
+            {
+                cleared,
+                failed,
+                firewall    = firewallStatus,
+                willRestart = req.Restart,
+                willClose   = true,
+            });
+        });
+
         return app;
+    }
+
+    // Spawn a detached PowerShell that waits for THIS process to exit, then (optionally) removes a
+    // directory we couldn't delete while running and/or relaunches the app. Running it as a separate
+    // process is what lets us clear the still-locked WebView2 cache and dodge the single-instance
+    // mutex on restart. Best-effort: a failed helper just means no deferred-delete / no restart.
+    private void ScheduleExitHelper(string? deleteDir, bool restart)
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (exe is null) return;
+
+            static string Q(string v) => "'" + v.Replace("'", "''") + "'";
+
+            var cmd = $"Wait-Process -Id {Environment.ProcessId} -ErrorAction SilentlyContinue; ";
+            if (deleteDir is not null)
+                // Retry while the WebView2 child processes finish winding down and release handles.
+                cmd += $"for ($i=0; $i -lt 20; $i++) {{ try {{ Remove-Item -LiteralPath {Q(deleteDir)} -Recurse -Force -ErrorAction Stop; break }} catch {{ Start-Sleep -Milliseconds 300 }} }}; ";
+            if (restart)
+                cmd += $"Start-Process -FilePath {Q(exe)}; ";
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NonInteractive -WindowStyle Hidden -Command \"{cmd}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            Process.Start(psi);
+        }
+        catch { /* best-effort */ }
     }
 }

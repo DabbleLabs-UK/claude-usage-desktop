@@ -8,6 +8,9 @@
     <Nullable>enable</Nullable>
     <RootNamespace>ClaudeUsage</RootNamespace>
     <AssemblyName>ClaudeUsage</AssemblyName>
+    <!-- Use our own entry point (Program.Main) instead of the Main that WPF's ApplicationDefinition
+         generates, so the headless uninstall-cleanup flag is handled before any WPF/GUI startup. -->
+    <StartupObject>ClaudeUsage.Program</StartupObject>
     <ApplicationIcon>design\logo_icon.ico</ApplicationIcon>
     <Version>0.2.0</Version>
     <AssemblyVersion>0.2.0.0</AssemblyVersion>
