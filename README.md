@@ -106,6 +106,59 @@ Bundle the entire `publish/` folder to distribute.
 
 ---
 
+## Cutting a release
+
+Releases are cut with **`release.ps1`** (repo root). Run it **on the Windows
+host**, not in the VM — it drives `dotnet publish`, `makensis` and `gh`, all of
+which are Windows-native. One command does the whole release atomically:
+
+```powershell
+pwsh -File .\release.ps1 0.2.2
+```
+
+(`powershell -File .\release.ps1 0.2.2` works too — the script supports both
+Windows PowerShell 5.1 and pwsh 7.)
+
+What it does, in order:
+
+1. Sets `<Version>` / `<AssemblyVersion>` / `<FileVersion>` in `ClaudeUsage.csproj`.
+2. Publishes win-x64 self-contained single-file to `dist\`. If the vboxsf
+   **bundle lock** stops a direct publish, it publishes to a temp dir and does a
+   **required, hash-checked copy-back** into `dist\` (never best-effort).
+3. **VERIFY GATE** — asserts `dist\ClaudeUsage.exe`'s FileVersion **exactly
+   equals** the release version. This is the check that catches the v0.2.1
+   stale-binary bug; if it fails, the release **aborts** before anything is
+   zipped, compiled, tagged or uploaded.
+4. Zips the verified `dist\` into `ClaudeUsage-vX.Y.Z-win-x64.zip` (excluding the
+   `ClaudeUsage.exe.WebView2\` profile dir, `_pkg\`, and `.old/.bak/.stuck/.prev/
+   .pdb/.zip` cruft).
+5. Compiles the NSIS installer **from the same verified `dist\`**
+   (`makensis /DAPP_VERSION=X.Y.Z`), so the zip and installer can never drift.
+6. Commits the version bump, tags `vX.Y.Z`, pushes, and creates the GitHub
+   release with **both** artifacts attached, marked **latest**.
+7. **Post-release verify** — re-checks the exe inside the built zip and the
+   installer both carry the right version, confirms both assets are attached on
+   GitHub, and prints a summary (version, tag, asset names, release URL).
+
+**Dry run** (build + verify + package, but no commit/tag/push/release — use this
+to exercise the verify gate safely):
+
+```powershell
+pwsh -File .\release.ps1 0.2.2 -DryRun
+```
+
+Options: `-NotesFile <path>` (release-notes markdown; defaults to
+`dist\RELEASE_NOTES_vX.Y.Z.md` if present), `-Branch <name>` (branch to push;
+defaults to the current branch).
+
+Prerequisites on the host: the [.NET 10 SDK](https://dotnet.microsoft.com/download),
+[NSIS](https://nsis.sourceforge.io/Download) (`winget install NSIS.NSIS`), and an
+authenticated [GitHub CLI](https://cli.github.com/) (`gh auth login`). If the
+verify gate (or any step) fails, the script aborts loudly and leaves nothing
+published; undo the version bump with `git checkout -- ClaudeUsage.csproj`.
+
+---
+
 ## Licence
 
 MIT
