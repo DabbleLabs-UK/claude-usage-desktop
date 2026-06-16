@@ -1030,6 +1030,13 @@
     </div>
     <div class="setting-row">
       <div>
+        <div class="setting-label">Keep my Claude login fresh automatically</div>
+        <div class="setting-note">When your login is about to expire, the app makes a tiny check-in to Claude (a handful of tokens, a few times a day) to refresh it — so your usage keeps showing without re-signing-in. This adds a very small amount to your own usage. Turn off to refresh manually instead (open Claude Code yourself when the numbers pause).</div>
+      </div>
+      <input type="checkbox" id="settingAutoRefresh" class="toggle">
+    </div>
+    <div class="setting-row">
+      <div>
         <div class="setting-label">Server port</div>
         <div class="setting-note">Restart required to take effect</div>
       </div>
@@ -1303,6 +1310,10 @@
   let lastData                = null;
   let _instanceId             = null;
   let _thresholds             = { orange: 0.90, yellow: 0.50, yellowGreen: 0.25 };
+  // Mirrors the autoRefreshLogin setting (default ON). Drives the banner explainer wording so the
+  // "Waiting on Claude Code…" card tells the user whether the app refreshes their login for them
+  // or they need to do it manually. Loaded at startup (initOnboarding) and on every settings load/save.
+  let _autoRefreshLogin       = true;
   let _reconnectPollTimer     = null;
   let _cardDataMap            = {};
   let _openCardKey            = null;
@@ -1712,33 +1723,61 @@
 
   // Map the raw auth/cooldown state to CALM, plain-language banner content. No "token",
   // "OAuth", "429", "backoff", "×2" or interval numbers ever reach the surface — those
-  // internals are gone; the explainer only ever speaks of the Claude "login". Three cases,
-  // chosen from the errorType the poller already tracks (+ failure count for the auth ramp):
-  //   refresh_rate_limited / rate_limit -> waiting on Claude Code to refresh the login (auto)
-  //   auth, first few misses            -> login briefly lapsed, reconnecting (auto)
-  //   auth, persistent  (or 'other')    -> login expired, needs the user to sign in again
+  // internals are gone; the explainer only ever speaks of the Claude "login". Cases are chosen
+  // from the typed ConnectivityState the poller sends (+ failure count for the auth ramp):
+  //   noNetwork                  -> offline; reconnects when the connection returns (auto)
+  //   rateLimited                -> waiting on Claude Code to refresh the login (auto)
+  //   authError, first few misses-> login briefly lapsed, reconnecting (auto)
+  //   authError, persistent      -> login expired, needs the user to sign in again
   const AUTH_RECONNECT_GRACE = 2;   // first couple of auth misses are treated as transient
 
   function _authBannerContent() {
     const s = _backoffState || {};
-    const t = s.errorType;
+    const t = s.state;
 
-    // RATE-LIMITED — the app deliberately paused and is waiting for Claude Code to refresh
-    // the login. Recovers on its own; nothing for the user to do.
-    if (t === 'refresh_rate_limited' || t === 'rate_limit') {
+    // OFFLINE — local connectivity loss (no network, DNS/route failure, timeout). Not a server
+    // or sign-in problem; it reconnects on its own the moment the connection is back.
+    if (t === 'noNetwork') {
       return {
         action: false,
-        title: 'Waiting on Claude Code to refresh the login',
+        title: 'Offline — will reconnect when your connection returns',
         explain:
-            'Claude Code refreshes your sign-in from time to time. To stay out of its way, '
-          + 'Claude Usage has paused for a moment and is waiting for that to happen. '
-          + '<strong>There’s nothing you need to do</strong> — it reconnects on its own and '
-          + 'your numbers update automatically. The figures below are the last ones it saw.',
+            'Claude Usage can’t reach the internet right now, so it can’t fetch fresh numbers. '
+          + '<strong>There’s nothing you need to do</strong> — it reconnects automatically as soon '
+          + 'as your connection is back, and your numbers update on their own. The figures below are '
+          + 'the last ones it saw, shown dimmed.',
+      };
+    }
+
+    // RATE-LIMITED — the app deliberately paused and is waiting for the Claude login to refresh.
+    // The explainer adapts to the autoRefreshLogin setting: ON → the app refreshes the login for
+    // you automatically; OFF → it won't shell out to Claude, so tell the user how to refresh by hand.
+    if (t === 'rateLimited') {
+      return {
+        action: false,
+        title: _autoRefreshLogin
+          ? 'Waiting on Claude Code to refresh the login'
+          : 'Your Claude login needs refreshing',
+        explain: _autoRefreshLogin
+          ? (
+              'Claude Code refreshes your sign-in from time to time. To stay out of its way, '
+            + 'Claude Usage has paused for a moment. <strong>There’s nothing you need to do</strong> — '
+            + 'automatic login refresh is on, so the app makes a tiny check-in to Claude to refresh '
+            + 'your login for you, and your numbers update on their own. The figures below are the '
+            + 'last ones it saw.'
+            )
+          : (
+              'Claude Usage has paused for a moment while your Claude sign-in needs refreshing. '
+            + '<strong>Automatic login refresh is turned off</strong>, so to update now open Claude '
+            + 'Code (or run any <em>claude</em> command) — Claude Usage picks the refreshed sign-in '
+            + 'up on its own, no restart needed. You can switch automatic refresh back on in Settings. '
+            + 'The figures below are the last ones it saw.'
+            ),
       };
     }
 
     // LAPSED, likely automatic — a brief loss of the sign-in; give it a chance to come back.
-    if (t === 'auth' && (s.consecutiveFailures || 0) <= AUTH_RECONNECT_GRACE) {
+    if (t === 'authError' && (s.consecutiveFailures || 0) <= AUTH_RECONNECT_GRACE) {
       return {
         action: false,
         title: 'Reconnecting to Claude…',
@@ -1752,7 +1791,7 @@
 
     // LAPSED, needs action — the sign-in has expired and won't return without the user. Tell
     // them plainly what happened, how it affects them, what to DO, and why the app needs it.
-    if (t === 'auth') {
+    if (t === 'authError') {
       return {
         action: true,
         title: 'Can’t reach your usage — Claude login expired',
@@ -1769,7 +1808,7 @@
       };
     }
 
-    // Fallback (errorType 'other' / unknown) — keep it reassuring and correct.
+    // Fallback (unknown/unmapped state) — keep it reassuring and correct.
     return {
       action: false,
       title: 'Reconnecting to Claude…',
@@ -1837,7 +1876,7 @@
     // Calm, cause-adapted surface text. Only rebuild when the case actually changes, so the
     // per-second tick can't interrupt reading/selecting the open explainer.
     const c = _authBannerContent();
-    const key = c.title + '|' + (c.action ? 'a' : 'c');
+    const key = c.title + '|' + (c.action ? 'a' : 'c') + '|' + (_autoRefreshLogin ? 'ar1' : 'ar0');
     if (key !== _lastBannerKey) {
       _lastBannerKey = key;
       banner.classList.toggle('backoff-action', !!c.action);
@@ -2430,6 +2469,7 @@
         const s = await r.json();
         _onboard.seen         = !!s.seenPhoneOnboarding;
         _onboard.firewallDone = !!s.firewallSetupDone;
+        _autoRefreshLogin     = s.autoRefreshLogin !== false;   // default ON; drives banner wording
         _dismissedHints = {};
         (s.dismissedHints || []).forEach(id => { _dismissedHints[id] = true; });
       }
@@ -2742,6 +2782,9 @@
       const s = await r.json();
       document.getElementById('settingAutostart').checked   = s.startWithWindows;
       document.getElementById('settingCloseToTray').checked = s.closeToTray;
+      // Default ON: only an explicit false turns it off.
+      _autoRefreshLogin = s.autoRefreshLogin !== false;
+      document.getElementById('settingAutoRefresh').checked  = _autoRefreshLogin;
       document.getElementById('settingPort').value          = s.serverPort;
       _loadedPreferredAdapter = s.preferredAdapterName || null;
       const ot_raw = typeof s.orangeThreshold      === 'number' ? s.orangeThreshold      : null;
@@ -2817,6 +2860,7 @@
       const body = {
         startWithWindows:     document.getElementById('settingAutostart').checked,
         closeToTray:          document.getElementById('settingCloseToTray').checked,
+        autoRefreshLogin:     document.getElementById('settingAutoRefresh').checked,
         serverPort:           parseInt(document.getElementById('settingPort').value, 10),
         orangeThreshold:      oPct / 100,
         yellowThreshold:      yPct / 100,
@@ -2832,6 +2876,8 @@
       _thresholds.orange      = body.orangeThreshold;
       _thresholds.yellow      = body.yellowThreshold;
       _thresholds.yellowGreen = body.yellowGreenThreshold;
+      _autoRefreshLogin       = body.autoRefreshLogin;
+      updateBackoffBanner();   // refresh the open banner explainer to match the new choice
       if (lastData) render(lastData);
       msg.style.color = 'var(--green)';
       msg.textContent = 'Saved.';

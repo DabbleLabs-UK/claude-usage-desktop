@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Windows;
 using ClaudeUsage.Hubs;
 using ClaudeUsage.Models;
@@ -40,6 +41,13 @@ public partial class App : Application
     public SettingsService SettingsService { get; private set; } = null!;
     private FirewallService _firewallService = null!;
 
+    // Debounce for NetworkChange events: NetworkAddressChanged/NetworkAvailabilityChanged fire in
+    // rapid bursts during a single adapter/IP transition. The timer is (re)armed on each event and
+    // only fires its action once the burst settles (NetworkSettleDelay of quiet).
+    private System.Threading.Timer? _networkDebounceTimer;
+    private readonly object _networkDebounceLock = new();
+    private static readonly TimeSpan NetworkSettleDelay = TimeSpan.FromSeconds(2);
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         // Single-instance guard: only one poller should ever hit the endpoint at a time.
@@ -77,6 +85,12 @@ public partial class App : Application
         InitTrayIcon();
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
+        // React to local network changes (the USB-tether / Wi-Fi swap, link up/down). On a settled
+        // change we drop any sticky 429 cooldown (the egress IP that earned it is gone) and fire an
+        // immediate re-probe, so a network blip recovers in seconds instead of sitting in a wait.
+        NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+        NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+
         _mainWindow = new MainWindow();
         _mainWindow.Show();
 
@@ -90,6 +104,9 @@ public partial class App : Application
     protected override async void OnExit(ExitEventArgs e)
     {
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+        NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+        _networkDebounceTimer?.Dispose();
         _showWaitRegistration?.Unregister(null);
         _showInstanceEvent?.Dispose();
         _notifyIcon?.Dispose();
@@ -284,6 +301,42 @@ public partial class App : Application
             _host?.Services.GetRequiredService<UsagePoller>().TriggerImmediatePoll();
     }
 
+    // An IP/adapter change (e.g. USB-tether took over routing, or Wi-Fi reconnected) -- always act,
+    // even if the network stayed "available", because the egress IP may have changed underneath us.
+    private void OnNetworkAddressChanged(object? sender, EventArgs e) => ScheduleNetworkSettleAction();
+
+    // Link availability flipped. Only act when it comes back UP; a transition to DOWN is handled by
+    // the poller's offline path (no point poking it while there's no route).
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+    {
+        if (e.IsAvailable) ScheduleNetworkSettleAction();
+    }
+
+    // (Re)arm the debounce timer; the action runs once the event burst has been quiet for
+    // NetworkSettleDelay, coalescing a flurry of address/availability events into one re-probe.
+    private void ScheduleNetworkSettleAction()
+    {
+        lock (_networkDebounceLock)
+        {
+            _networkDebounceTimer ??= new System.Threading.Timer(_ => OnNetworkSettled());
+            _networkDebounceTimer.Change(NetworkSettleDelay, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    // Fires once a network change has settled: drop any sticky 429 cooldown earned by the old
+    // egress IP, then trigger an immediate poll. TriggerImmediatePoll only releases the poller's
+    // wake semaphore, so the one-poller-at-a-time invariant is preserved. Best-effort throughout.
+    private void OnNetworkSettled()
+    {
+        if (_host is null) return;
+        try
+        {
+            _host.Services.GetRequiredService<UsageService>().NotifyNetworkChanged();
+            _host.Services.GetRequiredService<UsagePoller>().TriggerImmediatePoll();
+        }
+        catch { /* a transient resolve/poll failure here is harmless; the next cycle re-probes */ }
+    }
+
     private async Task CheckFirewallOnStartupAsync()
     {
         var settings = SettingsService.Current;
@@ -412,18 +465,27 @@ public partial class App : Application
                       .AllowAnyHeader()
                       .AllowCredentials()));
 
+        // Serialize enums (ConnectivityState) as camelCase strings on the wire -- "noNetwork",
+        // "rateLimited", etc. -- so the JS switch can compare readable values instead of ints.
         builder.Services.AddSignalR()
             .AddJsonProtocol(o =>
-                o.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
+            {
+                o.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+                o.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+            });
 
         builder.Services.ConfigureHttpJsonOptions(o =>
-            o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
+        {
+            o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+            o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        });
 
         builder.Services.AddSingleton(SettingsService);
         builder.Services.AddSingleton(_firewallService);
         builder.Services.AddSingleton<UsageState>();
         builder.Services.AddSingleton<UsageLog>();
         builder.Services.AddSingleton<AuthRefreshLog>();
+        builder.Services.AddSingleton<ClaudeCli>();
         builder.Services.AddSingleton<UsageService>();
         builder.Services.AddSingleton<UsagePoller>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<UsagePoller>());
@@ -526,9 +588,30 @@ public partial class App : Application
         app.MapGet("/api/settings", (SettingsService settings) =>
             Results.Ok(settings.Current with { StartWithWindows = settings.GetActualAutostart() }));
 
-        app.MapPost("/api/settings", (AppSettings body, SettingsService settings) =>
+        app.MapPost("/api/settings", async (HttpRequest request, SettingsService settings) =>
         {
-            settings.Save(body);
+            // Parse the raw body so we can tell which keys the client actually sent. Needed for the
+            // bool merge below: a bool can't signal "absent" once bound, and the record default would
+            // silently force an omitted field back to its default. Web defaults => camelCase + case-insensitive.
+            var webJson = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            using var doc = await JsonDocument.ParseAsync(request.Body);
+            var body = doc.Deserialize<AppSettings>(webJson) ?? new AppSettings();
+            var root = doc.RootElement;
+
+            // claudeCliPath is a manual settings.json-only override (not in the UI form). Preserve
+            // any existing value when the request omits it, so a UI save can't silently wipe it.
+            var mergedCliPath = body.ClaudeCliPath ?? settings.Current.ClaudeCliPath;
+
+            // autoRefreshLogin is a real UI toggle, but still preserve the stored value when a client
+            // omits the key (older cached client) -- otherwise the record default (ON) would override
+            // a user's explicit OFF. Only an explicitly-sent value changes it.
+            var mergedAutoRefresh = root.ValueKind == JsonValueKind.Object
+                                    && root.TryGetProperty("autoRefreshLogin", out _)
+                ? body.AutoRefreshLogin
+                : settings.Current.AutoRefreshLogin;
+
+            var merged = body with { ClaudeCliPath = mergedCliPath, AutoRefreshLogin = mergedAutoRefresh };
+            settings.Save(merged);
             return Results.Ok(settings.Current with { StartWithWindows = settings.GetActualAutostart() });
         });
 

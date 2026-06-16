@@ -14,9 +14,11 @@ namespace ClaudeUsage.Services;
 //
 // The fix: a no-Retry-After 429 triggers a LONG sticky cooldown (multi-hour, comparable to the
 // ~8h access-token lifetime) so the app stops poking the endpoint at all. Recovery is meant to
-// come from DISK-ADOPTION of the host `claude` refresh (residential IP, which works), NOT from
-// this timer -- TryAdoptFresherDiskTokenAsync runs every poll cycle, including during cooldown.
-// This timer only bounds the worst case where the host never refreshes for hours.
+// come from the host `claude` refresh (residential IP, which works) landing on disk, NOT from
+// this timer -- UsageService re-reads .credentials.json at the start of every poll cycle,
+// including during cooldown, so a host refresh is picked up promptly with no token-endpoint call.
+// A network address change also drops the cooldown outright (NotifyNetworkChanged), since the
+// penalising egress IP is gone. This timer only bounds the worst case where neither happens.
 //
 // KNOWN LIMITATION: from a VM/datacenter IP the app's OWN refresh may be throttled far harder
 // than residential `claude`, so a pure-idle own-network-refresh may be effectively unprovable

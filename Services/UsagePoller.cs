@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.NetworkInformation;
 using ClaudeUsage.Hubs;
 using ClaudeUsage.Models;
 using Microsoft.AspNetCore.SignalR;
@@ -78,6 +79,21 @@ public sealed class UsagePoller : BackgroundService
 
     private async Task PollAsync(CancellationToken ct)
     {
+        // Cheap pre-check: if the OS reports no usable network at all, don't even attempt the
+        // poll (and don't ramp the backoff). This is the "(b) connectivity loss" case -- hold the
+        // base cadence so we recover promptly when the link returns. NOTE: GetIsNetworkAvailable
+        // returns true if ANY non-loopback adapter is up, so on a box with a virtual adapter this
+        // rarely trips; the real offline detection is the null-StatusCode catch below.
+        if (!NetworkInterface.GetIsNetworkAvailable())
+        {
+            _logger.LogWarning("No network available; skipping poll, holding base cadence.");
+            _state.MarkStale();
+            await ApplyNoNetworkAsync(ct);
+            if (_state.Current is { } offline)
+                await _hub.Clients.All.SendAsync("usageUpdated", offline, ct);
+            return;
+        }
+
         try
         {
             var data = await _usageService.FetchAsync();
@@ -119,26 +135,56 @@ public sealed class UsagePoller : BackgroundService
         {
             _logger.LogWarning("401 -- auth error. Backing off (failure #{Count}).", _failureCount + 1);
             _state.MarkStale();
-            await ApplyBackoffAsync("auth", ct);
+            await ApplyBackoffAsync(ConnectivityState.AuthError, ct);
             if (_state.Current is { } stale)
                 await _hub.Clients.All.SendAsync("usageUpdated", stale, ct);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
         {
             _logger.LogWarning("429 -- rate limited. Backing off (failure #{Count}).", _failureCount + 1);
-            await ApplyBackoffAsync("rate_limit", ct);
+            await ApplyBackoffAsync(ConnectivityState.RateLimited, ct);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode is null)
+        {
+            // No HTTP response at all -- DNS failure, no route, connection refused, host
+            // unreachable, TLS failure. This is local connectivity loss, NOT a server/auth fault,
+            // so do NOT ramp the 30-min backoff and NEVER arm the sticky refresh cooldown. Hold the
+            // base cadence and recover promptly once the link returns (a NetworkChange event also
+            // fires an immediate re-probe).
+            _logger.LogWarning("No network response ({Type}) -- offline; holding base cadence.", ex.InnerException?.GetType().Name ?? ex.GetType().Name);
+            _state.MarkStale();
+            await ApplyNoNetworkAsync(ct);
+            if (_state.Current is { } stale)
+                await _hub.Clients.All.SendAsync("usageUpdated", stale, ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Not our shutdown token -- this is an HttpClient request timeout (TaskCanceledException
+            // with no cancellation requested), another symptom of connectivity loss. Treat it like
+            // offline: no ramp, base cadence.
+            _logger.LogWarning("Poll timed out -- treating as offline; holding base cadence.");
+            _state.MarkStale();
+            await ApplyNoNetworkAsync(ct);
+            if (_state.Current is { } stale)
+                await _hub.Clients.All.SendAsync("usageUpdated", stale, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
+            // Catch-all for anything not network/rate-limit/401. After the network catches above,
+            // the dominant real cause here is an unreadable/missing/malformed .credentials.json
+            // (FileNotFound / InvalidOperation / JsonException from ReadCredentialsAsync) -- i.e. a
+            // sign-in problem -- so route it through the AuthError grace-then-prompt path (which is
+            // also where the original design documented 'other' should land). A genuinely odd
+            // one-off self-heals on the next successful poll.
             _logger.LogError(ex, "Unexpected error fetching usage. Backing off (failure #{Count}).", _failureCount + 1);
-            await ApplyBackoffAsync("other", ct);
+            await ApplyBackoffAsync(ConnectivityState.AuthError, ct);
         }
     }
 
     // Increments failure count, doubles interval (capped), updates state, pushes hub message.
     // Schedule: failure 1 → 180s, 2 → 360s, 3 → 720s, 4 → 1440s, 5+ → 1800s.
-    private async Task ApplyBackoffAsync(string errorType, CancellationToken ct)
+    private async Task ApplyBackoffAsync(ConnectivityState state, CancellationToken ct)
     {
         _failureCount++;
         _currentInterval = (int)Math.Min(
@@ -146,7 +192,7 @@ public sealed class UsagePoller : BackgroundService
             MaxIntervalSec);
 
         var backoff = new BackoffInfo(
-            errorType,
+            state,
             _failureCount,
             _currentInterval,
             DateTimeOffset.UtcNow.AddSeconds(_currentInterval));
@@ -165,16 +211,40 @@ public sealed class UsagePoller : BackgroundService
 
     // Surfaces the "token endpoint rate-limited -- waiting on host refresh" state WITHOUT ramping
     // the poll interval. Unlike ApplyBackoffAsync this holds the cadence at base so every cycle
-    // promptly re-checks disk-adoption (the primary recovery path); the next poll, not a network
-    // refresh, is what recovers us once the host writes a fresher token. The banner message comes
-    // from the "refresh_rate_limited" errorType -- the frontend keeps it calm (no ramp/×2 noise).
+    // promptly re-reads the credentials file (the primary recovery path); the next poll, not a
+    // network refresh, is what recovers us once the host writes a fresher token. State RateLimited
+    // keeps the frontend banner calm (no ramp noise).
     private async Task ApplyRefreshRateLimitedAsync(CancellationToken ct)
     {
         _currentInterval = BaseIntervalSec;   // no exponential ramp; keep re-checking disk often
 
         var info = new BackoffInfo(
-            "refresh_rate_limited",
+            ConnectivityState.RateLimited,
             _failureCount,                    // not incremented: this is a waiting state, not a fail-ramp
+            _currentInterval,
+            DateTimeOffset.UtcNow.AddSeconds(_currentInterval));
+
+        _state.SetBackoff(info);
+
+        try
+        {
+            await _hub.Clients.All.SendAsync("backoffUpdated", info, ct);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    // Surfaces the calm "offline -- will reconnect when your connection returns" state for local
+    // connectivity loss. Like ApplyRefreshRateLimitedAsync this does NOT ramp the interval and
+    // does NOT touch the failure count: a network blip is not a server/auth fault, so we hold the
+    // base cadence and recover promptly once the link is back (a NetworkChange event also pokes an
+    // immediate poll). State NoNetwork drives the frontend's offline banner.
+    private async Task ApplyNoNetworkAsync(CancellationToken ct)
+    {
+        _currentInterval = BaseIntervalSec;   // no exponential ramp; reconnect fast when link returns
+
+        var info = new BackoffInfo(
+            ConnectivityState.NoNetwork,
+            _failureCount,                    // not incremented: a waiting state, not a fail-ramp
             _currentInterval,
             DateTimeOffset.UtcNow.AddSeconds(_currentInterval));
 
