@@ -139,6 +139,11 @@ What it does, in order:
 7. **Post-release verify** — re-checks the exe inside the built zip and the
    installer both carry the right version, confirms both assets are attached on
    GitHub, and prints a summary (version, tag, asset names, release URL).
+8. **Relaunch local app** (real runs only, unless `-NoRelaunch` is set) — kills
+   any running `ClaudeUsage.exe`, waits for it to fully exit (respects the
+   single-instance mutex), relaunches from the freshly-built `dist\`, then polls
+   `/api/version` to confirm the new version is live. Warns on timeout or version
+   mismatch; never hard-fails the release (the release itself already succeeded).
 
 **Dry run** (build + verify + package, but no commit/tag/push/release — use this
 to exercise the verify gate safely):
@@ -149,7 +154,8 @@ pwsh -File .\release.ps1 0.2.2 -DryRun
 
 Options: `-NotesFile <path>` (release-notes markdown; defaults to
 `dist\RELEASE_NOTES_vX.Y.Z.md` if present), `-Branch <name>` (branch to push;
-defaults to the current branch).
+defaults to the current branch), `-NoRelaunch` (skip step 8 — don't kill/restart
+the running app after the release; useful if you want to defer the restart).
 
 Prerequisites on the host: the [.NET 10 SDK](https://dotnet.microsoft.com/download),
 [NSIS](https://nsis.sourceforge.io/Download) (`winget install NSIS.NSIS`), and an

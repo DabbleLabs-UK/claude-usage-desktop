@@ -54,7 +54,13 @@ param(
     # Validate the FULL build + verify + packaging pipeline WITHOUT making any
     # irreversible change: no commit, no tag, no push, no GitHub release.
     # Use this to test the verify gate safely.
-    [switch] $DryRun
+    [switch] $DryRun,
+
+    # Skip the post-release relaunch of the local app onto the freshly-built dist.
+    # By default (when NOT set) the script kills any running ClaudeUsage.exe,
+    # relaunches from dist\, and checks /api/version matches the released version.
+    # Use -NoRelaunch if you want to defer the restart yourself.
+    [switch] $NoRelaunch
 )
 
 # --- Fail loud, fail early ----------------------------------------------------
@@ -404,6 +410,75 @@ if (-not $DryRun) {
     Assert ($assetNames -contains $SetupName) "GitHub release is missing asset: $SetupName"
     $releaseUrl = $rel.url
     Good "GitHub release has both assets attached"
+}
+
+# ==============================================================================
+# --- 8. Relaunch local app onto the freshly-built dist ------------------------
+Step "8. Relaunch local app onto v$Version dist"
+
+if ($DryRun) {
+    Info "DRY RUN -- skipping relaunch."
+} elseif ($NoRelaunch) {
+    Info "-NoRelaunch specified -- skipping. Restart ClaudeUsage.exe manually to pick up v$Version."
+} else {
+    # (a) Kill any running instance. The single-instance mutex means a relaunch
+    #     before the old process fully exits silently fails, so we must confirm
+    #     it's actually gone before starting the new one.
+    $killed = $false
+    $running = Get-Process -Name 'ClaudeUsage' -ErrorAction SilentlyContinue
+    if ($running) {
+        Info "Stopping running ClaudeUsage.exe (PID $($running.Id)) ..."
+        & taskkill /IM ClaudeUsage.exe /F | Out-Null
+        # Poll up to 10 s (20 x 500 ms) for the process to exit.
+        $waited = 0
+        while ($waited -lt 10) {
+            Start-Sleep -Milliseconds 500
+            $waited += 0.5
+            if (-not (Get-Process -Name 'ClaudeUsage' -ErrorAction SilentlyContinue)) {
+                $killed = $true
+                break
+            }
+        }
+        if (-not $killed) {
+            Write-Host "[WARN] ClaudeUsage.exe did not exit within 10 s; relaunch skipped." -ForegroundColor Yellow
+            Write-Host "       Restart manually: dist\ClaudeUsage.exe" -ForegroundColor Yellow
+        }
+    } else {
+        # Nothing was running -- relaunch unconditionally.
+        $killed = $true
+    }
+
+    if ($killed) {
+        # (b) Launch detached -- don't block the script on the app's lifetime.
+        Info "Launching dist\ClaudeUsage.exe detached ..."
+        Start-Process -FilePath $DistExe -WorkingDirectory $DistDir
+
+        # (c) Wait up to ~8 s for Kestrel to bind, then probe /api/version.
+        $apiUrl = 'http://localhost:5005/api/version'
+        $apiOk  = $false
+        for ($i = 0; $i -lt 8; $i++) {
+            Start-Sleep -Seconds 1
+            try {
+                $resp    = Invoke-WebRequest -Uri $apiUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+                $payload = $resp.Content | ConvertFrom-Json
+                $runVer  = $payload.version
+                if ($runVer -eq $Version) {
+                    Good "Running app now on v$Version  (/api/version confirmed)"
+                } else {
+                    Write-Host "[WARN] /api/version returned '$runVer', expected '$Version'." -ForegroundColor Yellow
+                    Write-Host "       The new exe may not have loaded yet -- check manually." -ForegroundColor Yellow
+                }
+                $apiOk = $true
+                break
+            } catch {
+                # Kestrel not yet ready; keep waiting.
+            }
+        }
+        if (-not $apiOk) {
+            Write-Host "[WARN] /api/version did not respond within ~8 s." -ForegroundColor Yellow
+            Write-Host "       The app may still be starting. Check it manually." -ForegroundColor Yellow
+        }
+    }
 }
 
 # ==============================================================================
