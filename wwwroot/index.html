@@ -75,7 +75,7 @@
 
     .updated {
       font-size: 0.68rem;
-      color: var(--muted);
+      color: #b0b8d4;
     }
 
     .stale {
@@ -112,7 +112,7 @@
     .gear-btn {
       background: none;
       border: none;
-      color: var(--muted);
+      color: #c0c8e0;
       font-size: 1.05rem;
       cursor: pointer;
       padding: 5px 7px;
@@ -1321,6 +1321,7 @@
   let _adapterCandidates      = [];
   let _backoffState           = null;
   let _lastGoodData           = null;
+  let _lastFetchedAt          = null;
   // Onboarding + reusable hint-card state. Loaded from the server-owned settings store
   // (NOT browser localStorage, which is unavailable in the embedded host). Survives relaunch.
   let _onboard                = { seen: false, firewallDone: false };
@@ -1596,7 +1597,7 @@
 
   // Exact display names for the windows we already shipped -- keeps the UI identical.
   const WINDOW_ALIAS = {
-    five_hour:        { label: '5-hour',         compact: 'Session' },
+    five_hour:        { label: '5-hour',         compact: '5-Hour' },
     seven_day:        { label: '7-day',          compact: 'Week' },
     seven_day_opus:   { label: 'Opus (7-day)',   compact: 'Opus' },
     seven_day_sonnet: { label: 'Sonnet (7-day)', compact: 'Sonnet' },
@@ -1610,7 +1611,7 @@
 
   // Display names from a key. seven_day_<model> -> "<Model> (7-day)"; any other key
   // is prettified (underscores -> spaces, Title Case). Aliases win so shipped names
-  // stay exact (Session, Week, Sonnet, Opus).
+  // stay exact (5-Hour, Week, Sonnet, Opus).
   function windowNames(key) {
     if (WINDOW_ALIAS[key]) return WINDOW_ALIAS[key];
     const m = /^seven_day_(.+)$/.exec(key);
@@ -1672,7 +1673,13 @@
     const rendered = new Set();
     for (const key of WINDOW_ORDER) {
       rendered.add(key);
-      const w = windows[key] || null;
+      let w = windows[key] || null;
+      // 'session' is the pre-rename API key for five_hour. Accept it as a fallback so
+      // stale log entries and API versions that still carry the old name render correctly.
+      if (w === null && key === 'five_hour' && windows['session'] != null) {
+        w = windows['session'];
+        rendered.add('session');   // suppress duplicate card in step 2
+      }
       const { label, compact } = windowNames(key);
       const windowMs = deriveWindowMs(key);
       _cardDataMap[label] = { label, w, windowMs };
@@ -1695,8 +1702,8 @@
     html += billingCard(data.extraUsage);
     document.getElementById('mainView').innerHTML = html;
 
-    document.getElementById('updatedEl').textContent =
-      'updated ' + new Date(data.fetchedAt).toLocaleTimeString();
+    _lastFetchedAt = new Date(data.fetchedAt).getTime();
+    _refreshUpdatedEl();
     document.getElementById('staleEl').classList.toggle('show', !!data.isStale);
     // Refresh the detail card preview if the detail view is currently open
     if (_openCardKey) {
@@ -1919,6 +1926,25 @@
     .then(d => { if (d) { _backoffState = d; updateBackoffBanner(); } })
     .catch(function() {});
 
+  function _fmtElapsedSince(ms) {
+    let s = Math.floor(ms / 1000);
+    const d = Math.floor(s / 86400); s -= d * 86400;
+    const h = Math.floor(s / 3600);  s -= h * 3600;
+    const m = Math.floor(s / 60);    s -= m * 60;
+    const p = [];
+    if (d > 0) p.push(d + 'd');
+    if (d > 0 || h > 0) p.push(h + 'h');
+    if (d > 0 || h > 0 || m > 0) p.push(m + 'm');
+    p.push(s + 's');
+    return p.join(' ');
+  }
+  function _refreshUpdatedEl() {
+    const el = document.getElementById('updatedEl');
+    if (!el || !_lastFetchedAt) return;
+    el.textContent = 'updated ' + new Date(_lastFetchedAt).toLocaleTimeString()
+      + ' (' + _fmtElapsedSince(Date.now() - _lastFetchedAt) + ')';
+  }
+
   // Tick every second to keep countdown elements current.
   // When a countdown transitions to "resetting...", trigger a full re-render so the
   // spare-ratio line (static HTML) also switches to "window ended" within ~1 second.
@@ -1946,6 +1972,7 @@
         : '';
     });
     if (needsRender && lastData) render(lastData);
+    _refreshUpdatedEl();
   }, 1000);
 
   // ---- Card detail view ----
