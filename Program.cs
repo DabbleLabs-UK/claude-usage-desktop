@@ -15,6 +15,11 @@ public static class Program
         if (HasFlag(args, "--uninstall-cleanup"))
             return UninstallCleanup.Run(purgeUsageLogs: HasFlag(args, "--purge-usage-logs"));
 
+        // Headless auth diagnostic: print the resolved credential source + one live usage poll, then
+        // exit (never starts the WPF app). Used to verify the credential wiring on a given machine.
+        if (HasFlag(args, "--auth-probe"))
+            return ClaudeUsage.Services.AuthProbe.Run();
+
         var app = new App();
         app.InitializeComponent();
         return app.Run();

@@ -65,7 +65,7 @@ public sealed class UsageService
 
     public async Task<UsageData> FetchAsync()
     {
-        var creds = await ReadCredentialsAsync();
+        var (creds, credSource) = await ResolveCredentialsAsync(_settings);
 
         // At most ONE refresh attempt per poll cycle (same burst-protection discipline as
         // the poller's backoff). Proactive consumes the attempt; if it ran, reactive won't.
@@ -83,7 +83,7 @@ public sealed class UsageService
         // line with a meaningless (negative) remaining time.
         if (creds.RefreshToken is null && creds.ExpiresAt == 0)
         {
-            _authLog.Log("POLL token-source: static setup-token (env CLAUDE_CODE_OAUTH_TOKEN or settings); refresh disabled, polling directly.");
+            _authLog.Log($"POLL token-source={credSource}: static token (no refresh token/expiry); refresh disabled, polling directly.");
         }
         else
         {
@@ -91,7 +91,7 @@ public sealed class UsageService
             var hasRefresh   = creds.RefreshToken is not null;
             var expiringSoon = IsExpiringSoon(creds.ExpiresAt);
             _authLog.Log(
-                $"POLL proactive-check: expiresAt={creds.ExpiresAt} ({FormatMs(creds.ExpiresAt)}) " +
+                $"POLL token-source={credSource} proactive-check: expiresAt={creds.ExpiresAt} ({FormatMs(creds.ExpiresAt)}) " +
                 $"remaining={remainingMs}ms (~{remainingMs / 1000}s) skew={RefreshSkewMs}ms " +
                 $"refreshTokenPresent={hasRefresh} expiringSoon={expiringSoon} " +
                 $"=> proactiveTrigger={hasRefresh && expiringSoon}");
@@ -286,7 +286,7 @@ public sealed class UsageService
         return null;
     }
 
-    private static async Task<UsageData> PollUsageAsync(string token)
+    internal static async Task<UsageData> PollUsageAsync(string token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -654,24 +654,51 @@ public sealed class UsageService
             ? v.GetDouble()
             : null;
 
-    // Resolves the bearer token used for usage polling. PRIORITY:
-    //   1. CLAUDE_CODE_OAUTH_TOKEN env var
-    //   2. settings.ClaudeCodeOauthToken
-    //   3. ~/.claude/.credentials.json  (legacy on-disk OAuth storage)
-    // (1)/(2) hold a long-lived `claude setup-token`. Newer Claude Code moved OAuth storage OUT of
-    // .credentials.json into the OS keystore (Windows Credential Manager), so on those hosts the
-    // file goes stale and a setup-token is the supported durable credential. A static token has no
-    // refresh token and no known expiry, so it is returned as (token, null, 0): this makes
-    // FetchAsync's proactive AND reactive refresh paths -- both gated on RefreshToken != null --
-    // no-op, and the token is polled with directly. If it is ever rejected (e.g. the ~1-year token
-    // lapsed) the poll 401 surfaces as the normal "login needs refreshing" state.
     private async Task<Credentials> ReadCredentialsAsync()
+        => (await ResolveCredentialsAsync(_settings)).Creds;
+
+    // Resolves the bearer credential used for usage polling, with a human-readable source label.
+    // PRIORITY:
+    //   1. manual override -- CLAUDE_CODE_OAUTH_TOKEN env var, else settings.ClaudeCodeOauthToken.
+    //      An escape hatch; must be a REAL OAuth access token. NOTE a `claude setup-token` value
+    //      does NOT work here -- it is inference-scoped and the usage endpoint returns 403 for it.
+    //   2. Windows Credential Manager -- where Claude Code 2.1.x (keytar/CredWriteW) now stores the
+    //      live OAuth login. It carries full usage scope and the CLI keeps it fresh.
+    //   3. ~/.claude/.credentials.json -- legacy on-disk storage (older Claude Code; the VM).
+    // (1) has no refresh token / no expiry, so it is returned as (token, null, 0): this makes
+    // FetchAsync's proactive AND reactive refresh paths -- both gated on RefreshToken != null --
+    // no-op, and the token is polled with directly. (2)/(3) carry the full
+    // {accessToken,refreshToken,expiresAt} set so the existing refresh + CLI-refresh machinery works
+    // unchanged (the CLI keeps the keystore/file token fresh; the next cycle re-reads it).
+    internal static async Task<(Credentials Creds, string Source)> ResolveCredentialsAsync(SettingsService settings)
     {
-        var overrideToken = ResolveOverrideToken();
+        var overrideToken = ResolveOverrideToken(settings);
         if (overrideToken is not null)
-            return new Credentials(overrideToken, null, 0);
+            return (new Credentials(overrideToken, null, 0), "override (env/settings)");
+
+        var storeJson = WindowsCredentialStore.TryReadClaudeCredentialJson();
+        if (storeJson is not null && TryParseCredentials(storeJson, out var storeCreds))
+            return (storeCreds, "Windows Credential Manager");
 
         var json = await File.ReadAllTextAsync(CredentialsPath);
+        return (ParseCredentials(json), ".credentials.json");
+    }
+
+    // Manual override token from env (preferred) or settings; null when neither is set. Trimmed;
+    // blank/whitespace is treated as unset.
+    private static string? ResolveOverrideToken(SettingsService settings)
+    {
+        var env = Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN");
+        if (!string.IsNullOrWhiteSpace(env)) return env.Trim();
+        var fromSettings = settings.Current.ClaudeCodeOauthToken;
+        if (!string.IsNullOrWhiteSpace(fromSettings)) return fromSettings.Trim();
+        return null;
+    }
+
+    // Parses the Claude credential JSON (identical shape on disk and in the keystore). Throws on a
+    // missing claudeAiOauth object or access token.
+    private static Credentials ParseCredentials(string json)
+    {
         var creds = JsonSerializer.Deserialize<CredentialsFile>(json);
         var oauth = creds?.ClaudeAiOauth
             ?? throw new InvalidOperationException("claudeAiOauth not found in credentials file.");
@@ -680,20 +707,16 @@ public sealed class UsageService
         return new Credentials(oauth.AccessToken, oauth.RefreshToken, oauth.ExpiresAt);
     }
 
-    // Long-lived setup-token from env (preferred) or settings; null when neither is set, in which
-    // case the on-disk .credentials.json is used. Trimmed; blank/whitespace is treated as unset.
-    private string? ResolveOverrideToken()
+    // Non-throwing variant for the keystore path so a malformed blob falls through to the file.
+    private static bool TryParseCredentials(string json, out Credentials creds)
     {
-        var env = Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN");
-        if (!string.IsNullOrWhiteSpace(env)) return env.Trim();
-        var fromSettings = _settings.Current.ClaudeCodeOauthToken;
-        if (!string.IsNullOrWhiteSpace(fromSettings)) return fromSettings.Trim();
-        return null;
+        try { creds = ParseCredentials(json); return true; }
+        catch { creds = default!; return false; }
     }
 
     // --- credentials models ---
 
-    private sealed record Credentials(string AccessToken, string? RefreshToken, long ExpiresAt);
+    internal sealed record Credentials(string AccessToken, string? RefreshToken, long ExpiresAt);
 
     private record CredentialsFile(
         [property: JsonPropertyName("claudeAiOauth")] OAuthCreds? ClaudeAiOauth);
