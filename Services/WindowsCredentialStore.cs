@@ -10,10 +10,11 @@ namespace ClaudeUsage.Services;
 // the secret under a target of the form "<service>/<account>"; Claude Code stores the SAME JSON it
 // used to write to the file: { "claudeAiOauth": { "accessToken", "refreshToken", "expiresAt", ... } }.
 //
-// We do NOT hard-code the exact target name (the service/account naming has varied across versions).
-// Instead we enumerate generic credentials whose target contains "claude" (case-insensitive) and
-// return the first whose blob parses as Claude's OAuth JSON. The blob's text encoding has also varied
-// between keytar builds (UTF-8 vs UTF-16LE), so we try both and keep whichever parses.
+// We match by BLOB CONTENT, not target name: the keytar service/account naming has varied across
+// versions and may not contain "claude" at all (so filtering by target name misses it). Every
+// generic credential's blob is decoded and we return the first that parses as the Claude OAuth
+// JSON. The blob's text encoding has also varied between keytar builds (UTF-8 vs UTF-16LE), so we
+// try both and keep whichever parses.
 //
 // Windows-only; returns null on any other OS, on a P/Invoke error, or when no matching entry exists
 // (the caller then falls back to the on-disk file).
@@ -45,15 +46,17 @@ internal static class WindowsCredentialStore
     [DllImport("advapi32.dll", EntryPoint = "CredFree")]
     private static extern void CredFree(IntPtr buffer);
 
-    // Returns the raw credential JSON string for Claude Code's keystore entry, or null if none.
-    public static string? TryReadClaudeCredentialJson()
+    // Returns the raw credential JSON string for Claude Code's keystore entry (and the target name
+    // it was found under, for diagnostics), or null if none.
+    public static string? TryReadClaudeCredentialJson(out string? matchedTarget)
     {
+        matchedTarget = null;
         if (!OperatingSystem.IsWindows()) return null;
         try
         {
-            // Enumerate ALL credentials (filter must be null when the ALL flag is set) and match in
-            // managed code -- the native filter only does prefix matching, which can't express
-            // "contains" and would miss naming variants.
+            // Enumerate ALL credentials (filter must be null when the ALL flag is set) and match by
+            // blob content in managed code -- the native filter only does target-name prefix
+            // matching, which can't find an entry whose name doesn't contain "claude".
             if (!CredEnumerate(null, CRED_ENUMERATE_ALL_CREDENTIALS, out var count, out var pCreds))
                 return null;
             try
@@ -64,14 +67,18 @@ internal static class WindowsCredentialStore
                     var entryPtr = Marshal.ReadIntPtr(pCreds, i * ptrSize);
                     if (entryPtr == IntPtr.Zero) continue;
                     var cred = Marshal.PtrToStructure<CREDENTIAL>(entryPtr);
-                    if (cred.Type != CRED_TYPE_GENERIC || cred.TargetName == IntPtr.Zero) continue;
+                    if (cred.Type != CRED_TYPE_GENERIC) continue;
 
-                    var target = Marshal.PtrToStringUni(cred.TargetName);
-                    if (target is null || target.IndexOf("claude", StringComparison.OrdinalIgnoreCase) < 0)
-                        continue;
-
+                    // DecodeBlob returns non-null only when the blob is Claude's OAuth JSON, so this
+                    // identifies the entry by content regardless of its target name.
                     var json = DecodeBlob(cred.CredentialBlob, cred.CredentialBlobSize);
-                    if (json is not null) return json;   // already validated as Claude OAuth JSON
+                    if (json is not null)
+                    {
+                        matchedTarget = cred.TargetName != IntPtr.Zero
+                            ? Marshal.PtrToStringUni(cred.TargetName)
+                            : null;
+                        return json;
+                    }
                 }
             }
             finally { CredFree(pCreds); }

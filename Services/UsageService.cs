@@ -676,9 +676,9 @@ public sealed class UsageService
         if (overrideToken is not null)
             return (new Credentials(overrideToken, null, 0), "override (env/settings)");
 
-        var storeJson = WindowsCredentialStore.TryReadClaudeCredentialJson();
+        var storeJson = WindowsCredentialStore.TryReadClaudeCredentialJson(out var storeTarget);
         if (storeJson is not null && TryParseCredentials(storeJson, out var storeCreds))
-            return (storeCreds, "Windows Credential Manager");
+            return (storeCreds, $"Windows Credential Manager [{storeTarget}]");
 
         var json = await File.ReadAllTextAsync(CredentialsPath);
         return (ParseCredentials(json), ".credentials.json");
