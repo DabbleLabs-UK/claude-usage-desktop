@@ -23,7 +23,14 @@ public record AppSettings(
     // Optional manual override for the `claude` CLI executable used to refresh the host token
     // (see ClaudeCli). Normally auto-detected (PATH / common install spots); set this only when
     // resolution fails. Not a UI field -- edited directly in settings.json.
-    string? ClaudeCliPath = null);
+    string? ClaudeCliPath = null,
+    // Long-lived `claude setup-token` value, used directly as the usage bearer token instead of
+    // reading ~/.claude/.credentials.json. Set this (or the CLAUDE_CODE_OAUTH_TOKEN env var, which
+    // takes precedence) when the host's Claude Code stores OAuth in the OS keystore (Windows
+    // Credential Manager) rather than the file -- newer CC does this, leaving .credentials.json
+    // stale/orphaned. A setup-token is a ~1-year non-rotating credential; re-mint it when it
+    // lapses. Not a UI field -- edited directly in settings.json (held in %APPDATA%\ClaudeUsage).
+    string? ClaudeCodeOauthToken = null);
 
 // Body for POST /api/hints/dismiss — the id of the hint card being dismissed.
 public record HintDismissRequest(string Id);

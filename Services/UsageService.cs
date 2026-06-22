@@ -77,14 +77,25 @@ public sealed class UsageService
         // fall through to poll with the existing token -- it may still work, or yield a 401
         // that the poller turns into the backoff/auth card.
         var nowMs        = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var remainingMs  = creds.ExpiresAt - nowMs;
-        var hasRefresh   = creds.RefreshToken is not null;
-        var expiringSoon = IsExpiringSoon(creds.ExpiresAt);
-        _authLog.Log(
-            $"POLL proactive-check: expiresAt={creds.ExpiresAt} ({FormatMs(creds.ExpiresAt)}) " +
-            $"remaining={remainingMs}ms (~{remainingMs / 1000}s) skew={RefreshSkewMs}ms " +
-            $"refreshTokenPresent={hasRefresh} expiringSoon={expiringSoon} " +
-            $"=> proactiveTrigger={hasRefresh && expiringSoon}");
+        // A static setup-token (env/settings) carries no refresh token and no expiry, so there is
+        // nothing to refresh -- the proactive/reactive blocks below are gated on RefreshToken !=
+        // null and skip automatically. Log it distinctly rather than emitting a proactive-check
+        // line with a meaningless (negative) remaining time.
+        if (creds.RefreshToken is null && creds.ExpiresAt == 0)
+        {
+            _authLog.Log("POLL token-source: static setup-token (env CLAUDE_CODE_OAUTH_TOKEN or settings); refresh disabled, polling directly.");
+        }
+        else
+        {
+            var remainingMs  = creds.ExpiresAt - nowMs;
+            var hasRefresh   = creds.RefreshToken is not null;
+            var expiringSoon = IsExpiringSoon(creds.ExpiresAt);
+            _authLog.Log(
+                $"POLL proactive-check: expiresAt={creds.ExpiresAt} ({FormatMs(creds.ExpiresAt)}) " +
+                $"remaining={remainingMs}ms (~{remainingMs / 1000}s) skew={RefreshSkewMs}ms " +
+                $"refreshTokenPresent={hasRefresh} expiringSoon={expiringSoon} " +
+                $"=> proactiveTrigger={hasRefresh && expiringSoon}");
+        }
 
         if (creds.RefreshToken is not null && IsExpiringSoon(creds.ExpiresAt))
         {
@@ -643,8 +654,23 @@ public sealed class UsageService
             ? v.GetDouble()
             : null;
 
-    private static async Task<Credentials> ReadCredentialsAsync()
+    // Resolves the bearer token used for usage polling. PRIORITY:
+    //   1. CLAUDE_CODE_OAUTH_TOKEN env var
+    //   2. settings.ClaudeCodeOauthToken
+    //   3. ~/.claude/.credentials.json  (legacy on-disk OAuth storage)
+    // (1)/(2) hold a long-lived `claude setup-token`. Newer Claude Code moved OAuth storage OUT of
+    // .credentials.json into the OS keystore (Windows Credential Manager), so on those hosts the
+    // file goes stale and a setup-token is the supported durable credential. A static token has no
+    // refresh token and no known expiry, so it is returned as (token, null, 0): this makes
+    // FetchAsync's proactive AND reactive refresh paths -- both gated on RefreshToken != null --
+    // no-op, and the token is polled with directly. If it is ever rejected (e.g. the ~1-year token
+    // lapsed) the poll 401 surfaces as the normal "login needs refreshing" state.
+    private async Task<Credentials> ReadCredentialsAsync()
     {
+        var overrideToken = ResolveOverrideToken();
+        if (overrideToken is not null)
+            return new Credentials(overrideToken, null, 0);
+
         var json = await File.ReadAllTextAsync(CredentialsPath);
         var creds = JsonSerializer.Deserialize<CredentialsFile>(json);
         var oauth = creds?.ClaudeAiOauth
@@ -652,6 +678,17 @@ public sealed class UsageService
         if (oauth.AccessToken is null)
             throw new InvalidOperationException("Access token not found in credentials file.");
         return new Credentials(oauth.AccessToken, oauth.RefreshToken, oauth.ExpiresAt);
+    }
+
+    // Long-lived setup-token from env (preferred) or settings; null when neither is set, in which
+    // case the on-disk .credentials.json is used. Trimmed; blank/whitespace is treated as unset.
+    private string? ResolveOverrideToken()
+    {
+        var env = Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN");
+        if (!string.IsNullOrWhiteSpace(env)) return env.Trim();
+        var fromSettings = _settings.Current.ClaudeCodeOauthToken;
+        if (!string.IsNullOrWhiteSpace(fromSettings)) return fromSettings.Trim();
+        return null;
     }
 
     // --- credentials models ---
