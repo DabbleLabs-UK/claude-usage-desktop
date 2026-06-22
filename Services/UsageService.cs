@@ -59,9 +59,30 @@ public sealed class UsageService
         _settings = settings;
     }
 
-    private static string CredentialsPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".claude", ".credentials.json");
+    // Mirrors Claude Code's own credentials-dir resolver so we read the SAME file CC writes:
+    //   CLAUDE_SECURESTORAGE_CONFIG_DIR (if defined -- empty means ~/.claude)
+    //   else CLAUDE_CONFIG_DIR (if non-empty)
+    //   else ~/.claude
+    // CC hardcoding-free: it derives the OAuth file as join(<this dir>, ".credentials.json"), so a
+    // host that sets CLAUDE_CONFIG_DIR keeps its live token outside %USERPROFILE%\.claude -- which
+    // is exactly the case the plain UserProfile path missed.
+    private static string DefaultClaudeDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+
+    private static string ConfigDir
+    {
+        get
+        {
+            var secure = Environment.GetEnvironmentVariable("CLAUDE_SECURESTORAGE_CONFIG_DIR");
+            if (secure is not null)
+                return secure.Length == 0 ? DefaultClaudeDir : secure;
+            var cfg = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+            if (!string.IsNullOrEmpty(cfg)) return cfg;
+            return DefaultClaudeDir;
+        }
+    }
+
+    private static string CredentialsPath => Path.Combine(ConfigDir, ".credentials.json");
 
     public async Task<UsageData> FetchAsync()
     {
@@ -680,8 +701,9 @@ public sealed class UsageService
         if (storeJson is not null && TryParseCredentials(storeJson, out var storeCreds))
             return (storeCreds, $"Windows Credential Manager [{storeTarget}]");
 
-        var json = await File.ReadAllTextAsync(CredentialsPath);
-        return (ParseCredentials(json), ".credentials.json");
+        var path = CredentialsPath;
+        var json = await File.ReadAllTextAsync(path);
+        return (ParseCredentials(json), $".credentials.json [{path}]");
     }
 
     // Manual override token from env (preferred) or settings; null when neither is set. Trimmed;
