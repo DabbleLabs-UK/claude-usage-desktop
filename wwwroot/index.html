@@ -1322,6 +1322,13 @@
   let _backoffState           = null;
   let _lastGoodData           = null;
   let _lastFetchedAt          = null;
+  // Per-window mid-period-reset tracking (keyed by the ORIGINAL API field name, e.g. five_hour,
+  // seven_day). Anthropic sometimes resets a window's credit counter to 0 WITHOUT advancing
+  // resetsAt -- utilization craters but the countdown keeps ticking through the same deadline.
+  // That is real, correct data (not a bug) -- distinct from a genuine rollover, where resetsAt
+  // jumps to a new future time. See windowResetState() below for the detection + sticky logic.
+  let _prevWindowState        = {};
+  let _lastTrackedFetchedAt   = null;
   // Onboarding + reusable hint-card state. Loaded from the server-owned settings store
   // (NOT browser localStorage, which is unavailable in the embedded host). Survives relaunch.
   let _onboard                = { seen: false, firewallDone: false };
@@ -1399,10 +1406,52 @@
     return code + ' ';
   }
 
+  // Treat utilization below this as "effectively zero" -- rounding-safe (matches the noUsage
+  // threshold below, which uses the same tolerance for the projected value).
+  const RESET_EPS = 0.5;
+
+  function _resetsAtEqual(a, b) {
+    if (!a || !b) return a === b;
+    return new Date(a).getTime() === new Date(b).getTime();
+  }
+
+  // Detects "credit counter reset mid-period" for one window: utilization collapses to ~0 while
+  // resetsAt does NOT advance. Distinct from a genuine window rollover (resetsAt jumps to a new
+  // future time), which is a normal fresh-period zero and needs no special copy.
+  //
+  // STICKY: once flagged, stays flagged on every subsequent render while resetsAt is unchanged and
+  // utilization remains ~0 -- so the honest-context copy shows whenever the user next looks, not
+  // only in the single render where the transition happened to land. Clears the moment either real
+  // usage resumes (utilization > 0 again) or the window genuinely rolls over (resetsAt advances).
+  //
+  // isNewSample gates the actual state UPDATE to once per distinct poll (fetchedAt), since render()
+  // is also called every 60s to refresh countdowns against the SAME last-received data -- without
+  // this gate that periodic re-render would re-derive the transition from prev==current (harmless,
+  // but redundant) instead of simply reading back the already-known flag.
+  function windowResetState(key, w, isNewSample) {
+    const prev = _prevWindowState[key];
+    if (!w || !w.resetsAt) return false;
+    if (!isNewSample) return prev ? prev.resetDetected : false;
+
+    let resetDetected = false;
+    if (prev && _resetsAtEqual(prev.resetsAt, w.resetsAt)) {
+      const wasUsed = prev.utilization >= RESET_EPS;
+      const nowZero = w.utilization < RESET_EPS;
+      if (nowZero && (wasUsed || prev.resetDetected)) resetDetected = true;
+    }
+    // resetsAt advanced (or no prior sample) -> not a mid-period reset; resetDetected stays false.
+
+    _prevWindowState[key] = { utilization: w.utilization, resetsAt: w.resetsAt, resetDetected };
+    return resetDetected;
+  }
+
   // windowMs: 5-hour or 7-day window in ms (falsy = no projection)
   // compactLabel: short label shown in compact mode ("Session", "Week")
   // clickable: pass false when rendering inside the detail view to suppress onclick
-  function card(label, w, windowMs, compactLabel, clickable = true) {
+  // resetDetected: true when THIS window just showed the mid-period-counter-reset signature
+  // (see windowResetState) -- swaps the zero-usage message for honest context instead of a bare
+  // "No usage yet this period" that would read as a lie alongside a mid-period countdown.
+  function card(label, w, windowMs, compactLabel, clickable = true, resetDetected = false) {
     const clickAttr = (clickable && w)
       ? ' onclick="openDetail(this.dataset.card)" data-card="' + label + '" style="cursor:pointer"'
       : '';
@@ -1535,11 +1584,14 @@
             + '<div class="elapsed-line"></div>'
             + '</div>'
         )
-        // Spare ratio: coloured number, "window ended" when the period has elapsed, or a plain
-        // "no usage yet" message at zero/non-finite usage (no divide-by-zero ratio or empty
+        // Spare ratio: coloured number, "window ended" when the period has elapsed, honest
+        // mid-period-reset context when the counter (not the window) reset, or a plain "no usage
+        // yet" message at zero/non-finite usage (no divide-by-zero ratio or empty
         // time-without-service readout). Normal numeric output whenever usage > 0.
         + (expired
           ? '<div class="spare-ratio-line" style="color:var(--muted)">Window ended — usage will update when the new period begins</div>'
+          : resetDetected
+          ? '<div class="spare-ratio-line" style="color:var(--muted)">Credit counter reset mid-period — 0% used since the reset (countdown unaffected)</div>'
           : noUsage
           ? '<div class="spare-ratio-line" style="color:var(--green)">No usage yet this period</div>'
           : '<div class="spare-ratio-line">Remaining period predicted spare ratio: '
@@ -1665,6 +1717,10 @@
       _lastGoodData = data;
     const windows = (data && data.windows) || {};
     _cardDataMap = {};
+    // A genuinely new poll vs. the 60s periodic re-render of the SAME lastData -- only advance the
+    // mid-period-reset tracking (windowResetState) on a new sample; a repeat render just reads back
+    // the already-known flag instead of re-deriving it from an unchanged prev==current comparison.
+    const isNewSample = !!(data && data.fetchedAt) && data.fetchedAt !== _lastTrackedFetchedAt;
     // Dismissible hint cards render at the top of the home view (re-emitted on every render
     // since render() rebuilds mainView wholesale; dismissed-state lives in _dismissedHints).
     let html = renderHintCards();
@@ -1682,8 +1738,9 @@
       }
       const { label, compact } = windowNames(key);
       const windowMs = deriveWindowMs(key);
-      _cardDataMap[label] = { label, w, windowMs };
-      html += card(label, w, windowMs, compact);
+      const resetDetected = windowResetState(key, w, isNewSample);
+      _cardDataMap[label] = { label, w, windowMs, resetDetected };
+      html += card(label, w, windowMs, compact, true, resetDetected);
     }
 
     // 2. Any other window that is currently non-null (new models/windows). Unknown
@@ -1694,14 +1751,16 @@
       if (!w) continue;
       const { label, compact } = windowNames(key);
       const windowMs = deriveWindowMs(key);
-      _cardDataMap[label] = { label, w, windowMs };
-      html += card(label, w, windowMs, compact);
+      const resetDetected = windowResetState(key, w, isNewSample);
+      _cardDataMap[label] = { label, w, windowMs, resetDetected };
+      html += card(label, w, windowMs, compact, true, resetDetected);
     }
 
     // 3. Billing card last (below the fold).
     html += billingCard(data.extraUsage);
     document.getElementById('mainView').innerHTML = html;
 
+    if (isNewSample) _lastTrackedFetchedAt = data.fetchedAt;
     _lastFetchedAt = new Date(data.fetchedAt).getTime();
     _refreshUpdatedEl();
     document.getElementById('staleEl').classList.toggle('show', !!data.isStale);
@@ -1709,7 +1768,7 @@
     if (_openCardKey) {
       const d = _cardDataMap[_openCardKey];
       if (d && d.w && d.windowMs && d.w.resetsAt) {
-        document.getElementById('detailCard').innerHTML = card(d.label, d.w, d.windowMs, null, false);
+        document.getElementById('detailCard').innerHTML = card(d.label, d.w, d.windowMs, null, false, d.resetDetected);
         const rs = new Date(d.w.resetsAt).getTime();
         const el = Math.max(0.01, Math.min(1, (Date.now() - (rs - d.windowMs)) / d.windowMs));
         const pr = d.w.utilization / el;
