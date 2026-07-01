@@ -41,6 +41,7 @@ public sealed class UsageService
     private static readonly HttpClient _http = new();
     private readonly ILogger<UsageService> _logger;
     private readonly AuthRefreshLog _authLog;
+    private readonly PollLog _pollLog;
     private readonly ClaudeCli _cli;
     private readonly SettingsService _settings;
 
@@ -51,10 +52,11 @@ public sealed class UsageService
     private int  _consecutive429;           // consecutive token-endpoint 429s; drives the ramp
     private long _cliRefreshNextAllowedMs;  // unix-ms; CLI refresh suppressed (cadence) until this instant
 
-    public UsageService(ILogger<UsageService> logger, AuthRefreshLog authLog, ClaudeCli cli, SettingsService settings)
+    public UsageService(ILogger<UsageService> logger, AuthRefreshLog authLog, PollLog pollLog, ClaudeCli cli, SettingsService settings)
     {
         _logger   = logger;
         _authLog  = authLog;
+        _pollLog  = pollLog;
         _cli      = cli;
         _settings = settings;
     }
@@ -161,7 +163,7 @@ public sealed class UsageService
 
         try
         {
-            var data = await PollUsageAsync(creds.AccessToken);
+            var data = await PollAndLogAsync(creds.AccessToken, credSource);
             if (refreshAttempted)
                 _authLog.Log("POLL ok after refresh this cycle -- recovery confirmed.");
             return data;
@@ -185,7 +187,7 @@ public sealed class UsageService
             if (cliFreshed is not null)
             {
                 _authLog.Log("REACTIVE: CLI refreshed disk token; retrying poll with fresh token.");
-                return await PollUsageAsync(cliFreshed.AccessToken);
+                return await PollAndLogAsync(cliFreshed.AccessToken, credSource);
             }
             if (IsInRefreshCooldown(out var remaining))
             {
@@ -205,7 +207,7 @@ public sealed class UsageService
                 throw;                              // fall through to existing backoff/error card
             }
             _authLog.Log("REACTIVE refresh succeeded; retrying poll once with fresh token.");
-            return await PollUsageAsync(refreshed.AccessToken); // a second 401 → backoff
+            return await PollAndLogAsync(refreshed.AccessToken, credSource); // a second 401 → backoff
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
         {
@@ -307,7 +309,22 @@ public sealed class UsageService
         return null;
     }
 
+    // Polls, then records the outcome (per-window utilization/resetsAt, plus raw JSON on a suspect
+    // reading) to poll.log. Wraps PollUsageWithRawAsync so EVERY successful poll -- proactive and
+    // reactive retries alike -- is captured with the token source that produced it.
+    private async Task<UsageData> PollAndLogAsync(string token, string credSource)
+    {
+        var (data, raw) = await PollUsageWithRawAsync(token);
+        _pollLog.LogSuccess(credSource, data, raw);
+        return data;
+    }
+
     internal static async Task<UsageData> PollUsageAsync(string token)
+        => (await PollUsageWithRawAsync(token)).Data;
+
+    // Core poll: returns the parsed UsageData AND the raw response body, so callers can log the
+    // exact bytes the API returned (the raw evidence for a false-zero) without a second request.
+    internal static async Task<(UsageData Data, string RawBody)> PollUsageWithRawAsync(string token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -319,7 +336,7 @@ public sealed class UsageService
         response.EnsureSuccessStatusCode();
 
         var body = await response.Content.ReadAsStringAsync();
-        return Parse(body);
+        return (Parse(body), body);
     }
 
     // True iff the token is expired or within RefreshSkewMs of expiry. An unknown/zero

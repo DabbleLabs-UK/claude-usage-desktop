@@ -485,6 +485,7 @@ public partial class App : Application
         builder.Services.AddSingleton<UsageState>();
         builder.Services.AddSingleton<UsageLog>();
         builder.Services.AddSingleton<AuthRefreshLog>();
+        builder.Services.AddSingleton<PollLog>();
         builder.Services.AddSingleton<ClaudeCli>();
         builder.Services.AddSingleton<UsageService>();
         builder.Services.AddSingleton<UsagePoller>();

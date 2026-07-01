@@ -16,6 +16,7 @@ public sealed class UsagePoller : BackgroundService
     private readonly UsageService _usageService;
     private readonly UsageState _state;
     private readonly UsageLog _log;
+    private readonly PollLog _pollLog;
     private readonly IHubContext<UsageHub> _hub;
     private readonly ILogger<UsagePoller> _logger;
     private readonly SemaphoreSlim _wakeSignal = new(0, 1);
@@ -27,12 +28,14 @@ public sealed class UsagePoller : BackgroundService
         UsageService usageService,
         UsageState state,
         UsageLog log,
+        PollLog pollLog,
         IHubContext<UsageHub> hub,
         ILogger<UsagePoller> logger)
     {
         _usageService = usageService;
         _state = state;
         _log = log;
+        _pollLog = pollLog;
         _hub = hub;
         _logger = logger;
     }
@@ -87,6 +90,7 @@ public sealed class UsagePoller : BackgroundService
         if (!NetworkInterface.GetIsNetworkAvailable())
         {
             _logger.LogWarning("No network available; skipping poll, holding base cadence.");
+            _pollLog.LogFailure("no network available (OS reports link down); poll skipped");
             _state.MarkStale();
             await ApplyNoNetworkAsync(ct);
             if (_state.Current is { } offline)
@@ -126,6 +130,7 @@ public sealed class UsagePoller : BackgroundService
             // refresh on disk (the primary recovery path). Do NOT ramp the poll backoff -- keep
             // the base cadence so each cycle re-checks disk-adoption and recovers promptly.
             _logger.LogWarning("Token endpoint rate-limited; own refresh suppressed until {Until}. Polling continues at base cadence to await host disk refresh.", ex.SuppressedUntilMs);
+            _pollLog.LogFailure($"refresh rate-limited (sticky 429 cooldown until {ex.SuppressedUntilMs}); awaiting host disk refresh");
             _state.MarkStale();
             await ApplyRefreshRateLimitedAsync(ct);
             if (_state.Current is { } stale)
@@ -134,6 +139,7 @@ public sealed class UsagePoller : BackgroundService
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
         {
             _logger.LogWarning("401 -- auth error. Backing off (failure #{Count}).", _failureCount + 1);
+            _pollLog.LogFailure($"401 auth error (refresh could not fix); backing off (failure #{_failureCount + 1})");
             _state.MarkStale();
             await ApplyBackoffAsync(ConnectivityState.AuthError, ct);
             if (_state.Current is { } stale)
@@ -142,6 +148,7 @@ public sealed class UsagePoller : BackgroundService
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
         {
             _logger.LogWarning("429 -- rate limited. Backing off (failure #{Count}).", _failureCount + 1);
+            _pollLog.LogFailure($"429 usage endpoint rate-limited; backing off (failure #{_failureCount + 1})");
             await ApplyBackoffAsync(ConnectivityState.RateLimited, ct);
         }
         catch (HttpRequestException ex) when (ex.StatusCode is null)
@@ -152,6 +159,7 @@ public sealed class UsagePoller : BackgroundService
             // base cadence and recover promptly once the link returns (a NetworkChange event also
             // fires an immediate re-probe).
             _logger.LogWarning("No network response ({Type}) -- offline; holding base cadence.", ex.InnerException?.GetType().Name ?? ex.GetType().Name);
+            _pollLog.LogFailure($"no HTTP response ({ex.InnerException?.GetType().Name ?? ex.GetType().Name}) -- offline; holding base cadence");
             _state.MarkStale();
             await ApplyNoNetworkAsync(ct);
             if (_state.Current is { } stale)
@@ -163,6 +171,7 @@ public sealed class UsagePoller : BackgroundService
             // with no cancellation requested), another symptom of connectivity loss. Treat it like
             // offline: no ramp, base cadence.
             _logger.LogWarning("Poll timed out -- treating as offline; holding base cadence.");
+            _pollLog.LogFailure("poll timed out (request cancellation, not shutdown) -- treating as offline");
             _state.MarkStale();
             await ApplyNoNetworkAsync(ct);
             if (_state.Current is { } stale)
@@ -178,6 +187,7 @@ public sealed class UsagePoller : BackgroundService
             // also where the original design documented 'other' should land). A genuinely odd
             // one-off self-heals on the next successful poll.
             _logger.LogError(ex, "Unexpected error fetching usage. Backing off (failure #{Count}).", _failureCount + 1);
+            _pollLog.LogFailure($"unexpected error ({ex.GetType().Name}: {ex.Message}); backing off (failure #{_failureCount + 1})");
             await ApplyBackoffAsync(ConnectivityState.AuthError, ct);
         }
     }
