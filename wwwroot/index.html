@@ -1326,7 +1326,10 @@
   // seven_day). Anthropic sometimes resets a window's credit counter to 0 WITHOUT advancing
   // resetsAt -- utilization craters but the countdown keeps ticking through the same deadline.
   // That is real, correct data (not a bug) -- distinct from a genuine rollover, where resetsAt
-  // jumps to a new future time. See windowResetState() below for the detection + sticky logic.
+  // jumps to a new future time. Also records the reset's anchor time so the burn-rate projection
+  // can be re-based to run from the reset instead of the original window start (otherwise usage
+  // accrued since the reset gets spread across the WHOLE window and reads as a falsely low
+  // projection). See windowResetState() + effectiveWindowMs() below.
   let _prevWindowState        = {};
   let _lastTrackedFetchedAt   = null;
   // Onboarding + reusable hint-card state. Loaded from the server-owned settings store
@@ -1415,43 +1418,69 @@
     return new Date(a).getTime() === new Date(b).getTime();
   }
 
-  // Detects "credit counter reset mid-period" for one window: utilization collapses to ~0 while
-  // resetsAt does NOT advance. Distinct from a genuine window rollover (resetsAt jumps to a new
-  // future time), which is a normal fresh-period zero and needs no special copy.
+  // Detects + tracks a "credit counter reset mid-period" for one window: utilization collapses to
+  // ~0 while resetsAt does NOT advance. Distinct from a genuine window rollover (resetsAt jumps to
+  // a new future time), which is a normal fresh-period zero and needs no special handling.
   //
-  // STICKY: once flagged, stays flagged on every subsequent render while resetsAt is unchanged and
-  // utilization remains ~0 -- so the honest-context copy shows whenever the user next looks, not
-  // only in the single render where the transition happened to land. Clears the moment either real
-  // usage resumes (utilization > 0 again) or the window genuinely rolls over (resetsAt advances).
+  // Returns { resetDetected, resetAnchorAt }. resetAnchorAt is the poll time (fetchedAt, ms) of the
+  // FIRST poll where the drop was observed -- the best available anchor for "when did the reset
+  // happen" (the true moment could be anywhere between the previous poll and this one; we have no
+  // finer signal, so "first poll after the drop" is the documented fallback). effectiveWindowMs()
+  // below uses this anchor to re-base the projection so it runs from the reset over the remaining
+  // duration, instead of understating the burn rate by spreading post-reset usage across the WHOLE
+  // original window.
+  //
+  // PERSISTS FOR THE REST OF THE WINDOW: once anchored, resetDetected/resetAnchorAt stay set on
+  // every subsequent poll as long as resetsAt is unchanged -- NOT only while utilization happens to
+  // still read ~0. A window that reset and then accrued real usage still needs the rebased anchor
+  // for an accurate projection; only a genuine rollover (resetsAt advances) clears it.
   //
   // isNewSample gates the actual state UPDATE to once per distinct poll (fetchedAt), since render()
   // is also called every 60s to refresh countdowns against the SAME last-received data -- without
   // this gate that periodic re-render would re-derive the transition from prev==current (harmless,
   // but redundant) instead of simply reading back the already-known flag.
-  function windowResetState(key, w, isNewSample) {
+  function windowResetState(key, w, isNewSample, sampleTime) {
     const prev = _prevWindowState[key];
-    if (!w || !w.resetsAt) return false;
-    if (!isNewSample) return prev ? prev.resetDetected : false;
+    if (!w || !w.resetsAt) return { resetDetected: false, resetAnchorAt: null };
+    if (!isNewSample) return prev
+      ? { resetDetected: !!prev.resetAnchorAt, resetAnchorAt: prev.resetAnchorAt }
+      : { resetDetected: false, resetAnchorAt: null };
 
-    let resetDetected = false;
+    let resetAnchorAt = null;
     if (prev && _resetsAtEqual(prev.resetsAt, w.resetsAt)) {
-      const wasUsed = prev.utilization >= RESET_EPS;
-      const nowZero = w.utilization < RESET_EPS;
-      if (nowZero && (wasUsed || prev.resetDetected)) resetDetected = true;
+      if (prev.resetAnchorAt) {
+        resetAnchorAt = prev.resetAnchorAt;               // still the same post-reset period
+      } else if (prev.utilization >= RESET_EPS && w.utilization < RESET_EPS) {
+        resetAnchorAt = sampleTime;                        // fresh transition -- anchor here
+      }
     }
-    // resetsAt advanced (or no prior sample) -> not a mid-period reset; resetDetected stays false.
+    // resetsAt advanced (or no prior sample) -> genuine fresh period; no anchor.
 
-    _prevWindowState[key] = { utilization: w.utilization, resetsAt: w.resetsAt, resetDetected };
-    return resetDetected;
+    _prevWindowState[key] = { utilization: w.utilization, resetsAt: w.resetsAt, resetAnchorAt };
+    return { resetDetected: !!resetAnchorAt, resetAnchorAt };
+  }
+
+  // Computes the window length to use for elapsed/projection maths for one card. Normally just the
+  // real window duration. When this window is in the mid-period-reset state (windowResetState
+  // above), usage on screen only accrued since the reset -- projecting it across the FULL original
+  // window massively understates the burn rate (a falsely low "spare ratio", e.g. reading ~7%
+  // headroom-implying when the true post-reset burn rate is far higher). Re-base to the REMAINING
+  // duration from the reset moment to the original resetsAt instead, so the projection reflects
+  // usage-since-reset over time-left. A genuine rollover (resetsAt itself advances) is NOT
+  // re-based here -- windowResetState already excludes that case (resetDetected is false).
+  function effectiveWindowMs(windowMs, resetsAtMs, resetDetected, resetAnchorAt) {
+    if (resetDetected && resetAnchorAt) return Math.max(1, resetsAtMs - resetAnchorAt);
+    return windowMs;
   }
 
   // windowMs: 5-hour or 7-day window in ms (falsy = no projection)
   // compactLabel: short label shown in compact mode ("Session", "Week")
   // clickable: pass false when rendering inside the detail view to suppress onclick
-  // resetDetected: true when THIS window just showed the mid-period-counter-reset signature
-  // (see windowResetState) -- swaps the zero-usage message for honest context instead of a bare
-  // "No usage yet this period" that would read as a lie alongside a mid-period countdown.
-  function card(label, w, windowMs, compactLabel, clickable = true, resetDetected = false) {
+  // resetDetected/resetAnchorAt: set when THIS window is in a mid-period-counter-reset period (see
+  // windowResetState) -- re-bases the projection to the reset moment (effectiveWindowMs) so the
+  // spare-ratio/projection reflect usage-since-reset instead of understating the burn rate, and
+  // swaps the zero-usage message for honest context while usage is still ~0.
+  function card(label, w, windowMs, compactLabel, clickable = true, resetDetected = false, resetAnchorAt = null) {
     const clickAttr = (clickable && w)
       ? ' onclick="openDetail(this.dataset.card)" data-card="' + label + '" style="cursor:pointer"'
       : '';
@@ -1476,7 +1505,11 @@
     if (windowMs && w.resetsAt) {
       const resetsAt = new Date(w.resetsAt).getTime();
       const expired  = Date.now() >= resetsAt;
-      const elapsed  = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
+      // Re-based window length: the real duration normally, or (per effectiveWindowMs) the
+      // remaining span from a detected mid-period reset to resetsAt, so elapsed/proj below reflect
+      // usage-since-reset over time-left rather than the whole original window.
+      const projWindowMs = effectiveWindowMs(windowMs, resetsAt, resetDetected, resetAnchorAt);
+      const elapsed  = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - projWindowMs)) / projWindowMs));
       const proj     = pct / elapsed;
       const pc       = projColor(proj);
 
@@ -1525,12 +1558,15 @@
         ? '<div class="rounding-warning">Usage % is rounded to whole numbers -- actual usage could be slightly higher than shown. Near the weekly cap, treat the remaining headroom as approximate.</div>'
         : '';
 
-      const _elapsedSec0     = elapsed * windowMs / 1000;
+      const _elapsedSec0     = elapsed * projWindowMs / 1000;
       const _secsUntilReset0 = Math.max(0, (resetsAt - Date.now()) / 1000);
       const _secsUntil100_0  = pct >= 100 ? 0 : Math.max(0, (100 - pct) * _elapsedSec0 / pct);
       const _noSvcSec0       = Math.max(0, _secsUntilReset0 - _secsUntil100_0);
+      // data-window-ms carries the (possibly re-based) window length so the per-second countdown
+      // refresh (below, the ".no-svc-dur" interval handler) recomputes from the same anchor without
+      // needing to know about resetDetected/resetAnchorAt itself.
       const noSvcSpan = '<span class="no-svc-dur" data-pct="' + pct
-        + '" data-window-ms="' + windowMs + '" data-resets-at="' + w.resetsAt + '">'
+        + '" data-window-ms="' + projWindowMs + '" data-resets-at="' + w.resetsAt + '">'
         + (isOver && _noSvcSec0 > 0
           ? '   Est. time without service: <b>' + fmtTimeWithoutService(Math.round(_noSvcSec0)) + '</b>'
           : '')
@@ -1585,12 +1621,15 @@
             + '</div>'
         )
         // Spare ratio: coloured number, "window ended" when the period has elapsed, honest
-        // mid-period-reset context when the counter (not the window) reset, or a plain "no usage
-        // yet" message at zero/non-finite usage (no divide-by-zero ratio or empty
-        // time-without-service readout). Normal numeric output whenever usage > 0.
+        // mid-period-reset context while the counter (not the window) reset AND usage is still ~0,
+        // or a plain "no usage yet" message at zero/non-finite usage (no divide-by-zero ratio or
+        // empty time-without-service readout). Normal numeric output whenever usage > 0 -- this
+        // now includes a mid-period reset once real usage has accrued since it: proj/rc/ratioFmt
+        // above are already computed from the RE-BASED elapsed (projWindowMs), so the number shown
+        // is the corrected (higher) burn-rate projection, not a suppressed/blanked prediction.
         + (expired
           ? '<div class="spare-ratio-line" style="color:var(--muted)">Window ended — usage will update when the new period begins</div>'
-          : resetDetected
+          : (resetDetected && noUsage)
           ? '<div class="spare-ratio-line" style="color:var(--muted)">Credit counter reset mid-period — 0% used since the reset (countdown unaffected)</div>'
           : noUsage
           ? '<div class="spare-ratio-line" style="color:var(--green)">No usage yet this period</div>'
@@ -1721,6 +1760,10 @@
     // mid-period-reset tracking (windowResetState) on a new sample; a repeat render just reads back
     // the already-known flag instead of re-deriving it from an unchanged prev==current comparison.
     const isNewSample = !!(data && data.fetchedAt) && data.fetchedAt !== _lastTrackedFetchedAt;
+    // The poll's own timestamp is the reset anchor candidate (see windowResetState) -- using the
+    // server-observed fetch time, not client Date.now(), keeps the anchor consistent regardless of
+    // when the browser happens to render it.
+    const sampleTime = data && data.fetchedAt ? new Date(data.fetchedAt).getTime() : null;
     // Dismissible hint cards render at the top of the home view (re-emitted on every render
     // since render() rebuilds mainView wholesale; dismissed-state lives in _dismissedHints).
     let html = renderHintCards();
@@ -1738,9 +1781,9 @@
       }
       const { label, compact } = windowNames(key);
       const windowMs = deriveWindowMs(key);
-      const resetDetected = windowResetState(key, w, isNewSample);
-      _cardDataMap[label] = { label, w, windowMs, resetDetected };
-      html += card(label, w, windowMs, compact, true, resetDetected);
+      const { resetDetected, resetAnchorAt } = windowResetState(key, w, isNewSample, sampleTime);
+      _cardDataMap[label] = { label, w, windowMs, resetDetected, resetAnchorAt };
+      html += card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt);
     }
 
     // 2. Any other window that is currently non-null (new models/windows). Unknown
@@ -1751,9 +1794,9 @@
       if (!w) continue;
       const { label, compact } = windowNames(key);
       const windowMs = deriveWindowMs(key);
-      const resetDetected = windowResetState(key, w, isNewSample);
-      _cardDataMap[label] = { label, w, windowMs, resetDetected };
-      html += card(label, w, windowMs, compact, true, resetDetected);
+      const { resetDetected, resetAnchorAt } = windowResetState(key, w, isNewSample, sampleTime);
+      _cardDataMap[label] = { label, w, windowMs, resetDetected, resetAnchorAt };
+      html += card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt);
     }
 
     // 3. Billing card last (below the fold).
@@ -1768,9 +1811,10 @@
     if (_openCardKey) {
       const d = _cardDataMap[_openCardKey];
       if (d && d.w && d.windowMs && d.w.resetsAt) {
-        document.getElementById('detailCard').innerHTML = card(d.label, d.w, d.windowMs, null, false, d.resetDetected);
+        document.getElementById('detailCard').innerHTML = card(d.label, d.w, d.windowMs, null, false, d.resetDetected, d.resetAnchorAt);
         const rs = new Date(d.w.resetsAt).getTime();
-        const el = Math.max(0.01, Math.min(1, (Date.now() - (rs - d.windowMs)) / d.windowMs));
+        const projMs = effectiveWindowMs(d.windowMs, rs, d.resetDetected, d.resetAnchorAt);
+        const el = Math.max(0.01, Math.min(1, (Date.now() - (rs - projMs)) / projMs));
         const pr = d.w.utilization / el;
         const rp = (1 - el) * 100;
         const hw = 100 - pr;
@@ -2089,10 +2133,10 @@
     if (!d || !d.w) return;
     history.pushState({ view: 'detail', cardKey: cardKey }, '');
     _openCardKey = cardKey;
-    const { label, w, windowMs } = d;
+    const { label, w, windowMs, resetDetected, resetAnchorAt } = d;
     const win = humanWindow(windowMs);
     document.getElementById('detailTitle').textContent = label;
-    document.getElementById('detailCard').innerHTML = card(label, w, windowMs, null, false);
+    document.getElementById('detailCard').innerHTML = card(label, w, windowMs, null, false, resetDetected, resetAnchorAt);
 
     // Projection (and the zoomed spare-ratio SVG) need both a window length and a
     // reset time. When either is missing the window has no projection -- hide the
@@ -2103,9 +2147,11 @@
     document.getElementById('explainRatio').parentElement.classList.toggle('hidden', !hasProj);
 
     if (hasProj) {
-      // Compute spare-ratio values for the SVG (same formulas as card())
+      // Compute spare-ratio values for the SVG (same formulas as card(), incl. the mid-period-reset
+      // re-base -- see effectiveWindowMs)
       const resetsAt  = new Date(w.resetsAt).getTime();
-      const elapsed   = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
+      const projMs    = effectiveWindowMs(windowMs, resetsAt, resetDetected, resetAnchorAt);
+      const elapsed   = Math.max(0.01, Math.min(1, (Date.now() - (resetsAt - projMs)) / projMs));
       const proj      = w.utilization / elapsed;
       const remPeriod = (1 - elapsed) * 100;
       const headroom  = 100 - proj;
