@@ -52,6 +52,10 @@ public sealed class UsageService
     private int  _consecutive429;           // consecutive token-endpoint 429s; drives the ramp
     private long _cliRefreshNextAllowedMs;  // unix-ms; CLI refresh suppressed (cadence) until this instant
 
+    // Last known-good (non-held) extra_usage reading + when it was observed, for ExtraUsageGuard.
+    // Same single-poller-sequential invariant as the cooldown fields above -- no locking needed.
+    private (ExtraUsageData Data, DateTimeOffset At)? _lastGoodExtraUsage;
+
     public UsageService(ILogger<UsageService> logger, AuthRefreshLog authLog, PollLog pollLog, ClaudeCli cli, SettingsService settings)
     {
         _logger   = logger;
@@ -315,7 +319,26 @@ public sealed class UsageService
     private async Task<UsageData> PollAndLogAsync(string token, string credSource)
     {
         var (data, raw) = await PollUsageWithRawAsync(token);
+
+        // poll.log gets the RAW parsed value regardless of what the guard below decides --
+        // real transitions (and bad ones) stay auditable there even when we hold a bad reading
+        // back from the UI/state/history below.
         _pollLog.LogSuccess(credSource, data, raw);
+
+        var guard = ExtraUsageGuard.Apply(data.ExtraUsage, data.Windows.Count > 0, _lastGoodExtraUsage, data.FetchedAt);
+        if (guard.Held)
+        {
+            _authLog.Log(
+                $"EXTRA_USAGE HELD: raw={data.ExtraUsage?.Utilization ?? 0:0.##}% this poll (mid-month, " +
+                $"windows present, previously non-zero) -- serving last-known {guard.Value!.Utilization:0.##}% " +
+                $"from {_lastGoodExtraUsage!.Value.At:yyyy-MM-dd HH:mm:ss}Z. Raw value is still in poll.log.");
+            data = data with { ExtraUsage = guard.Value };
+        }
+        else if (guard.UpdateBaseline && guard.Value is not null)
+        {
+            _lastGoodExtraUsage = (guard.Value, data.FetchedAt);
+        }
+
         return data;
     }
 

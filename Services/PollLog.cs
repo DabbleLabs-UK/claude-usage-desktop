@@ -5,7 +5,8 @@ using ClaudeUsage.Models;
 namespace ClaudeUsage.Services;
 
 // Dedicated, append-only diagnostic log for EVERY usage poll -- the evidence trail for the
-// intermittent "false zero" (a window reading 0% / "no usage yet" mid-period when it shouldn't).
+// intermittent "false zero" (a window reading 0% / "no usage yet" mid-period when it shouldn't,
+// or extra_usage reading 0% for a single poll and bouncing back -- see ExtraUsageGuard).
 //
 //   %APPDATA%\ClaudeUsage\poll.log        (current)
 //   %APPDATA%\ClaudeUsage\poll.log.1      (one rotated backup)
@@ -16,9 +17,12 @@ namespace ClaudeUsage.Services;
 // bounded at ~2 * MaxBytes regardless of how long the app runs.
 //
 // On EVERY poll we record one summary line: outcome, isStale, token source, and each window's
-// utilization + resetsAt exactly as parsed from the API. On a SUSPICIOUS success (a window at 0%,
-// or a sharp drop from the previous sample) we ALSO dump the raw usage JSON on the next line, so a
-// false zero is captured in full the moment it happens and never needs to be caught live again.
+// utilization + resetsAt exactly as parsed from the API. This is always the RAW value straight
+// from the parsed response -- ExtraUsageGuard may separately hold back a bad extra_usage reading
+// from state/UI/history, but this log always shows what the API actually returned. On a
+// SUSPICIOUS success (a window or extra_usage at 0%, or a sharp drop from the previous sample) we
+// ALSO dump the raw usage JSON on the next line, so a false zero is captured in full the moment
+// it happens and never needs to be caught live again.
 //
 // SAFETY: the usage-endpoint body carries no token material (only utilization/resets), so dumping
 // it raw is safe -- unlike the auth log, no redaction is needed. Writes are best-effort and fully
@@ -40,6 +44,9 @@ public sealed class PollLog
 
     // A window is treated as "zero" at or below this (guards float noise around 0).
     private const double ZeroEps = 0.0001;
+
+    // Synthetic key for tracking extra_usage in the same _last dict as real windows below.
+    private const string ExtraUsageKey = "extra_usage";
 
     private readonly object _lock = new();
 
@@ -95,6 +102,30 @@ public sealed class PollLog
                 }
 
                 _last[key] = (util, resets);
+            }
+
+            // extra_usage is not a window (no resets_at of its own), but is exactly as susceptible
+            // to a spurious-zero API glitch -- mirror the same isZero/sharp-drop detection used for
+            // windows above so a bad extra_usage reading gets flagged and its raw JSON captured too.
+            // Tracked in the same _last dict; "extra_usage" can't collide with a real window key
+            // since Parse() special-cases and strips it out of the windows map.
+            var euUtil = data.ExtraUsage?.Utilization;
+            if (euUtil is { } euValue)
+            {
+                var euIsZero = euValue <= ZeroEps;
+                if (_last.TryGetValue(ExtraUsageKey, out var prevEu))
+                {
+                    var euDrop = prevEu.Util - euValue;
+                    if (euIsZero && prevEu.Util > ZeroEps)
+                        suspectReasons.Add($"extra_usage ->0% (was {prevEu.Util:0.##}%; no resets_at of its own -- see EXTRA_USAGE HELD in auth log)");
+                    else if (euDrop >= SharpDropPct)
+                        suspectReasons.Add($"extra_usage drop {prevEu.Util:0.##}%->{euValue:0.##}% ({euDrop:0.##}pp)");
+                }
+                else if (euIsZero)
+                {
+                    suspectReasons.Add("extra_usage 0% (no prior sample this run)");
+                }
+                _last[ExtraUsageKey] = (euValue, null);
             }
 
             var extra = data.ExtraUsage is { } eu

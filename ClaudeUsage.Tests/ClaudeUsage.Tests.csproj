@@ -13,6 +13,8 @@
   <ItemGroup>
     <Compile Include="..\Services\CumulativeUsage.cs" Link="CumulativeUsage.cs" />
     <Compile Include="..\Services\RefreshCooldownPolicy.cs" Link="RefreshCooldownPolicy.cs" />
+    <Compile Include="..\Services\ExtraUsageGuard.cs" Link="ExtraUsageGuard.cs" />
+    <Compile Include="..\Models\UsageData.cs" Link="UsageData.cs" />
   </ItemGroup>
 
   <ItemGroup>
