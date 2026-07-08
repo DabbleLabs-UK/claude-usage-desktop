@@ -362,7 +362,17 @@ if ($DryRun) {
     Write-Host "    gh release create v$Version `"$ZipPath`" `"$SetupPath`" --latest --title 'v$Version' --notes-file `"$NotesFileWin`""
 } else {
     Exec 'git' @('-C', $Repo, 'add', 'ClaudeUsage.csproj')
-    Exec 'git' @('-C', $Repo, 'commit', '-m', "Release v$Version")
+    # If the version bump was already committed (e.g. by CC before this script
+    # ran), 'git add' stages nothing and a plain 'git commit' would fail with
+    # "nothing to commit" and abort the whole release via the trap above. Check
+    # via 'diff --cached --name-only' (always exits 0) rather than branching on
+    # commit's own exit code, so a genuinely clean tree doesn't blow up the trap.
+    $staged = (& git -C $Repo diff --cached --name-only -- ClaudeUsage.csproj)
+    if ([string]::IsNullOrWhiteSpace($staged)) {
+        Info "Version already committed; skipping commit step."
+    } else {
+        Exec 'git' @('-C', $Repo, 'commit', '-m', "Release v$Version")
+    }
     Exec 'git' @('-C', $Repo, 'tag', "v$Version")
     Exec 'git' @('-C', $Repo, 'push', 'origin', $Branch)
     Exec 'git' @('-C', $Repo, 'push', 'origin', "v$Version")
