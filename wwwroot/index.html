@@ -244,9 +244,33 @@
       top: 0; bottom: 0;
       left: calc(var(--time-pos, 0) * (100% - 74px));
       width: 2px;
-      background: rgba(255, 255, 255, 0.38);
+      background: #ffffff;
       border-radius: 1px;
       pointer-events: none;
+    }
+
+    /* Inward-facing end caps on the elapsed marker: 8px-wide, 4px-high solid white
+       triangles whose flat (outer) face sits just beyond each end of the line, sloping in
+       so their edges pass exactly through the corners of the 2px line (seamless, no notch)
+       -- top cap points down, bottom cap points up. */
+    .elapsed-line::before,
+    .elapsed-line::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+    }
+    .elapsed-line::before {
+      top: -3px;
+      border-top: 4px solid #ffffff;
+    }
+    .elapsed-line::after {
+      bottom: -3px;
+      border-bottom: 4px solid #ffffff;
     }
 
     /* 100% cap marker: fixed at capPos of the track on BOTH bars. Marks the cap on the actual bar
