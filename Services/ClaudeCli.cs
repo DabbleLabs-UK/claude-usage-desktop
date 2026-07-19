@@ -152,7 +152,15 @@ public sealed class ClaudeCli
                 CreateNoWindow         = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
+                // Run from a stable, non-build directory so the CLI's Stop hook never
+                // sees a build-artifact folder (e.g. "net10.0-windows") as its cwd and
+                // announces that leaf as a completed job. The user profile always exists.
+                WorkingDirectory       = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             };
+            // Opt this utility invocation out of the shared Claude Code Stop-hook
+            // announcer (dispatch.ps1 exits early when CC_SILENT=1 is set), so our
+            // few-times-a-day token refresh never fires a spurious voice announcement.
+            psi.Environment["CC_SILENT"] = "1";
             if (isScript)
             {
                 // A .cmd/.bat shim can't be launched directly with redirect -- go via cmd.exe.
