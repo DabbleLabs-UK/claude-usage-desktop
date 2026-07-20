@@ -1,0 +1,28 @@
+{
+    "_comment": "Single source of truth for this app on dabblelabs.uk. Deployed verbatim to <docroot>/claude-usage-desktop/manifest.json and read at render time by lib/display.php (dl_read_manifest). Supersedes the old app.json + display.json overlay. Schema: DABBLELABS_PORTFOLIO_SPEC.md / BrainMop note 501.",
+    "schema_version": 1,
+    "id": "claude-usage-desktop",
+    "name": "Claude Usage Desktop",
+    "tagline": "Real time predictions of your Claude usage against your plan's limits, so you never get cut short again",
+    "description": "Claude Usage Desktop is a Windows app that shows your Claude Code subscription usage in real time - session limits, weekly caps, per-model (Sonnet and Opus) usage, projected end-of-period values, and live reset countdowns. It reads Claude Code's local credential and usage data straight from your machine, so it only has something to show while Claude Code is installed and signed in on the same PC.\n\nThe window lives in the system tray and refreshes by itself every few minutes. The same data is also served as a local web page, so you can read it on your phone or tablet over the same Wi-Fi - open Settings, scan the QR code, and browse to the LAN URL it shows.\n\nWindows 10 (x64) or later, with the Edge WebView2 runtime. Nothing leaves your machine: it reads local data only and cannot fetch your usage remotely. No accounts, no servers, no analytics.",
+    "play_store_url": "",
+    "feature_image": "feature.png",
+    "screenshots": [
+        "screenshots/screenshot_main_1.png",
+        "screenshots/screenshot_details_1.png",
+        "screenshots/screenshot_settings_1.png"
+    ],
+    "logo": "logo.png",
+    "favicon": "favicon.png",
+    "os": [
+        "windows",
+        "web"
+    ],
+    "experiment_id": "EXPERIMENT 004",
+    "privacy_url": "https://dabblelabs.uk/claude-usage-desktop/privacy.html",
+    "tos_url": "https://dabblelabs.uk/claude-usage-desktop/tos.html",
+    "github_release_url": "https://github.com/DabbleLabs-UK/claude-usage-desktop/releases/latest",
+    "repo_url": "https://github.com/DabbleLabs-UK/claude-usage-desktop",
+    "status": "experimental",
+    "download_pending": false
+}

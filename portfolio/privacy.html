@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy &ndash; Claude Usage Desktop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/site.css">
+</head>
+<body class="page-app">
+  <div class="container policy-page">
+    <header class="policy-header">
+      <a class="back-link" href="index.php">&larr; Back to Claude Usage Desktop</a>
+      <h1>Privacy Policy</h1>
+      <p class="policy-meta">
+        <strong>App:</strong> Claude Usage Desktop<span class="sep">&middot;</span>
+        <strong>Developer:</strong> DabbleLabs UK<span class="sep">&middot;</span>
+        <strong>Last updated:</strong> 30 June 2026
+      </p>
+    </header>
+
+    <h2>1. Overview</h2>
+    <p>Claude Usage Desktop runs on your own Windows PC and shows your Claude Code subscription usage. It is an independent DabbleLabs UK project and is not affiliated with, endorsed by, or operated by Anthropic. It has no accounts of its own, no sign-in, and no analytics. DabbleLabs UK operates no server for this app and receives none of your data. This policy explains exactly what the app reads, what it sends, and to where.</p>
+
+    <h2>2. What the app reads from your machine</h2>
+    <p>To show your usage, the app reads two things that already exist locally because you run Claude Code:</p>
+    <ul>
+      <li>Your Claude Code credential file (<code>%UserProfile%\.claude\.credentials.json</code>), to obtain the access token Claude Code has already stored there.</li>
+      <li>Your Claude usage figures, fetched as described in section 3.</li>
+    </ul>
+    <p>It does not read your prompts, your conversations, your code, or any other files.</p>
+
+    <h2>3. What leaves your machine, and where it goes</h2>
+    <p>The app makes outbound connections only to Anthropic, using your own Claude Code access token. It sends that token to <strong>Anthropic's official usage endpoint</strong> (<code>https://api.anthropic.com/api/oauth/usage</code>) to retrieve your current usage figures, roughly every three minutes while it is running and again when your PC wakes from sleep. When the access token has expired, it also refreshes it via <strong>Anthropic's OAuth token endpoint</strong> (<code>https://platform.claude.com/v1/oauth/token</code>), the same way Claude Code itself does. Both are Anthropic's own APIs, and the token is your own.</p>
+    <p>These are the only places anything leaves your machine, and both are Anthropic. Your token and usage data are <strong>not</strong> sent to DabbleLabs UK, and not to any third party. The app contains no analytics, telemetry, advertising, or tracking. Your use of Anthropic's API is governed by Anthropic's own terms and privacy policy.</p>
+
+    <h2>4. Local network (phone / tablet) feature</h2>
+    <p>While running, the app also serves the same usage view as a small web page from your PC on your local network, so you can open it on another device (e.g. your phone) on the same Wi-Fi. This server listens on a port you choose (default 5005) and is <strong>not protected by a password</strong>: any device on your local network that can reach that port can view your usage figures. It is served only on your local network and is never published to the internet by the app. The first time it is needed, the app asks Windows (via a UAC prompt) to open that port in the Windows Firewall; this happens only if you confirm. If you decline, the phone/tablet feature simply will not be reachable from other devices.</p>
+
+    <h2>5. Data stored on your device</h2>
+    <p>The app stores its own settings (such as the chosen port and alert thresholds) at <code>%AppData%\ClaudeUsage\settings.json</code>. If you enable "start with Windows", it adds an entry under your user account's startup registry key. If the firewall port was opened, that firewall rule and the startup entry remain until removed. Deleting the app's folder and its <code>%AppData%\ClaudeUsage</code> settings removes its stored data; the optional firewall rule and startup entry can be removed from Windows if you added them.</p>
+
+    <h2>6. Third parties</h2>
+    <p>Other than the request to Anthropic's official API described in section 3, the app shares no data with anyone. It includes no advertising or tracking, and DabbleLabs UK receives nothing.</p>
+
+    <h2>7. Contact</h2>
+    <p>Questions about this policy can be sent to DabbleLabs UK at <strong>jody.florian@gmail.com</strong>, or via the project's source repository.</p>
+  </div>
+
+  <footer class="footer">
+    <div class="footer-tagline">Code, chemistry, and a few too many late nights.</div>
+    <div class="footer-row">
+      <a href="../">Home</a>
+    </div>
+    <div class="copyright">&copy; 2026 DabbleLabs UK &middot; Brewed by hand in the UK</div>
+  </footer>
+</body>
+</html>

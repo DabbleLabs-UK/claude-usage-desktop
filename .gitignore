@@ -7,3 +7,6 @@ publish/
 binBuildCheck/
 *.zip
 installer/Output/
+
+# Local deploy target for deploy-portfolio.sh (see deploy.config.example.json).
+deploy.config.json

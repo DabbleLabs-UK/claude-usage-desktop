@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to deploy.config.json (gitignored) to deploy this app's portfolio/ subtree with deploy-portfolio.sh. Names a host, not a secret - authentication is entirely via the ssh alias in ~/.ssh/config, so no key or password is stored here or copied to the server.",
+  "_ssh_alias": "An alias defined in ~/.ssh/config. MUST be vps1: the old UWH host is a warm standby overwritten by a 15-minute vps1 -> UWH mirror, so a deploy there is silently reverted within 15 minutes.",
+  "_docroot": "Absolute path to the web root on that host. The app's subtree is <docroot>/<id>/ and the runner refuses to write anywhere else.",
+  "ssh_alias": "vps1",
+  "docroot": "/home/dabblela/public_html"
+}

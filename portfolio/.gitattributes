@@ -1,0 +1,4 @@
+# Portfolio payload is deployed byte-for-byte to the web server.
+# Keep LF so a deploy from Windows never rewrites line endings on the server.
+*.html text eol=lf
+*.json text eol=lf
