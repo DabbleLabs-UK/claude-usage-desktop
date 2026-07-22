@@ -15,6 +15,10 @@ public record UsageWindow(double Utilization, DateTimeOffset? ResetsAt);
 //   AuthError   -- the saved Claude sign-in is invalid/expired (a 401 the refresh couldn't fix) or
 //                  unreadable. Grace-then-prompt: first couple of misses read as "reconnecting",
 //                  then "sign in again". Also the fallback for otherwise-unclassified failures.
+//   SignedOut   -- LoginStatePolicy classified the on-disk/keystore token as a DEAD login (a
+//                  refresh token present but expiresAt==0, or refreshTokenExpiresAt already
+//                  past). Distinct from RateLimited/AuthError: nothing is coming on its own --
+//                  neither the CLI nor our own refresh can fix a lapsed login, only /login can.
 //   Live        -- normal; in practice no BackoffInfo is sent (the banner is simply hidden).
 public enum ConnectivityState
 {
@@ -22,6 +26,7 @@ public enum ConnectivityState
     NoNetwork,
     RateLimited,
     AuthError,
+    SignedOut,
 }
 
 // Active backoff/waiting state pushed to the UI while polling is not LIVE. State drives the calm

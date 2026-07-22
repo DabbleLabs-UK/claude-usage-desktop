@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($cred = Get-Content \"$env:USERPROFILE\\\\.claude\\\\.credentials.json\" | ConvertFrom-Json; $token = $cred.claudeAiOauth.accessToken; $headers = @{ \"Authorization\"=\"Bearer $token\"; \"anthropic-beta\"=\"oauth-2025-04-20\"; \"User-Agent\"=\"claude-code/2.1.0\"; \"Accept\"=\"application/json\" }; Invoke-RestMethod -Uri \"https://api.anthropic.com/api/oauth/usage\" -Headers $headers | ConvertTo-Json -Depth 5)",
+      "PowerShell(cd C:\\\\Users\\\\jodyf\\\\Desktop\\\\_DESKTOP\\\\programming\\\\claude-usage-desktop\\\\ClaudeUsage; Start-Process dotnet -ArgumentList \"run\" -WorkingDirectory \\(Get-Location\\) -PassThru; Start-Sleep 6; Invoke-RestMethod http://localhost:5005/api/usage | ConvertTo-Json -Depth 5)",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(ie4uinit.exe -show)",
+      "PowerShell(Compress-Archive *)",
+      "Bash(dotnet build *)",
+      "Bash(dotnet publish *)",
+      "Bash(Compress-Archive -Path ./publish/* -DestinationPath ./ClaudeUsage-v0.1.11-win-x64.zip -Force)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
+    ]
+  }
+}

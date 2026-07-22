@@ -122,6 +122,20 @@ public sealed class UsagePoller : BackgroundService
                 data.Windows.GetValueOrDefault("seven_day")?.Utilization,
                 data.Windows.Count);
         }
+        catch (DeadLoginException)
+        {
+            // UsageService already classified this as a DEAD login and skipped all CLI/network
+            // refresh attempts -- nothing is coming on its own. Surface a dedicated, honest
+            // state instead of the "waiting on Claude Code to refresh" banner, and hold the base
+            // cadence (no ramp) so the moment the user runs /login, the next cycle's disk read
+            // picks up the fresh token immediately.
+            _logger.LogWarning("Dead login detected (expiresAt==0 with refresh token present, or refresh token itself expired); awaiting manual /login.");
+            _pollLog.LogFailure("dead login detected (expiresAt==0+refreshToken, or refreshTokenExpiresAt past); awaiting manual /login, no refresh attempted");
+            _state.MarkStale();
+            await ApplySignedOutAsync(ct);
+            if (_state.Current is { } stale)
+                await _hub.Clients.All.SendAsync("usageUpdated", stale, ct);
+        }
         catch (RefreshRateLimitedException ex)
         {
             // Own token refresh is suppressed by the sticky 429 cooldown and disk had nothing
@@ -231,6 +245,30 @@ public sealed class UsagePoller : BackgroundService
         var info = new BackoffInfo(
             ConnectivityState.RateLimited,
             _failureCount,                    // not incremented: this is a waiting state, not a fail-ramp
+            _currentInterval,
+            DateTimeOffset.UtcNow.AddSeconds(_currentInterval));
+
+        _state.SetBackoff(info);
+
+        try
+        {
+            await _hub.Clients.All.SendAsync("backoffUpdated", info, ct);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    // Surfaces the honest "signed out of Claude Code -- run /login to reconnect" state for a DEAD
+    // login (see LoginStatePolicy/DeadLoginException). Like the other waiting states this does
+    // NOT ramp the interval -- the fix is entirely out of the app's hands until the user signs in
+    // again, and holding the base cadence means the very next poll after that picks the fresh
+    // token straight up off disk with no extra delay.
+    private async Task ApplySignedOutAsync(CancellationToken ct)
+    {
+        _currentInterval = BaseIntervalSec;   // no exponential ramp; recover promptly after /login
+
+        var info = new BackoffInfo(
+            ConnectivityState.SignedOut,
+            _failureCount,                    // not incremented: a waiting state, not a fail-ramp
             _currentInterval,
             DateTimeOffset.UtcNow.AddSeconds(_currentInterval));
 

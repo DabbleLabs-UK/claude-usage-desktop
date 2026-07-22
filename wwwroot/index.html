@@ -1598,12 +1598,16 @@
 
       const wrapStyle = 'style="--time-pos:' + (elapsed * capPos).toFixed(4) + ';--cap-pos:' + capPos.toFixed(4) + '"';
       const period   = !clickable ? barPeriod(windowMs) : null;
+      // Elapsed % shown alongside the countdown reuses the same `elapsed` fraction that
+      // drives --time-pos above, so the bracketed number and the marker never disagree.
+      // Suppressed once the window has ended (timeUntilSec already switches to "resetting...").
+      const countdownPct = expired ? '' : ' (' + Math.round(elapsed * 100) + '%)';
       return (
         '<div class="card"' + clickAttr + '>'
         // Head: short label left, countdown right
         + '<div class="card-head">'
         + '<span class="label">' + (compactLabel || label) + '</span>'
-        + '<span class="countdown" data-resets-at="' + w.resetsAt + '">' + timeUntilSec(w.resetsAt) + '</span>'
+        + '<span class="countdown" data-resets-at="' + w.resetsAt + '" data-window-ms="' + projWindowMs + '">' + timeUntilSec(w.resetsAt) + countdownPct + '</span>'
         + '</div>'
         // In the detail view (!clickable) each bar gets its own wrapper + caption so the
         // cap-line / elapsed-line don't extend through the caption text. In grid cards,
@@ -1861,6 +1865,7 @@
   // from the typed ConnectivityState the poller sends (+ failure count for the auth ramp):
   //   noNetwork                  -> offline; reconnects when the connection returns (auto)
   //   rateLimited                -> waiting on Claude Code to refresh the login (auto)
+  //   signedOut                  -> DEAD login (server-classified); needs the user to /login
   //   authError, first few misses-> login briefly lapsed, reconnecting (auto)
   //   authError, persistent      -> login expired, needs the user to sign in again
   const AUTH_RECONNECT_GRACE = 2;   // first couple of auth misses are treated as transient
@@ -1907,6 +1912,30 @@
             + 'up on its own, no restart needed. You can switch automatic refresh back on in Settings. '
             + 'The figures below are the last ones it saw.'
             ),
+      };
+    }
+
+    // SIGNED OUT — a DEAD login: the saved sign-in has fully lapsed (not just due for a refresh),
+    // so neither Claude Code's own CLI refresh nor this app's refresh can bring it back on their
+    // own. Nothing is coming; be honest about it rather than showing the "waiting" banner above.
+    if (t === 'signedOut') {
+      return {
+        action: true,
+        title: 'Signed out of Claude Code',
+        explain:
+            '<strong>What happened:</strong> the Claude sign-in saved on this PC has fully lapsed — '
+          + 'this isn’t a brief refresh wait, it’s actually signed out. Claude Usage can’t fetch '
+          + 'fresh numbers until you sign in again. The figures below are paused and shown '
+          + 'dimmed.<br><br>'
+          + '<strong>What to do:</strong> run <code>/login</code> in Claude Code (or open Claude '
+          + 'Code and sign in) to reconnect. Claude Usage picks the refreshed sign-in up '
+          + 'automatically — no restart needed.<br><br>'
+          + (_autoRefreshLogin
+              ? ('<strong>Why it’s not fixing itself:</strong> automatic login refresh is on, but '
+               + 'it can only refresh a login that’s still alive — this one has fully lapsed, so '
+               + 'only signing in again will fix it.')
+              : ('<strong>Automatic login refresh is turned off</strong>, and even with it on this '
+               + 'couldn’t fix a fully lapsed login — only signing in again will.')),
       };
     }
 
@@ -2078,7 +2107,14 @@
   setInterval(function() {
     let needsRender = false;
     document.querySelectorAll('.countdown[data-resets-at]').forEach(function(el) {
-      const next = timeUntilSec(el.dataset.resetsAt);
+      const base = timeUntilSec(el.dataset.resetsAt);
+      const windowMs = el.dataset.windowMs ? parseFloat(el.dataset.windowMs) : null;
+      let next = base;
+      if (base !== 'resetting...' && windowMs) {
+        const resetsAt = new Date(el.dataset.resetsAt).getTime();
+        const elapsed  = Math.max(0, Math.min(1, (Date.now() - (resetsAt - windowMs)) / windowMs));
+        next = base + ' (' + Math.round(elapsed * 100) + '%)';
+      }
       if (el.textContent !== 'resetting...' && next === 'resetting...') needsRender = true;
       el.textContent = next;
     });

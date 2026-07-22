@@ -94,6 +94,27 @@ public sealed class UsageService
     {
         var (creds, credSource) = await ResolveCredentialsAsync(_settings);
 
+        // --- DEAD LOGIN short-circuit --------------------------------------------------------
+        // A refresh token present alongside expiresAt==0 (Claude Code's own signal that the
+        // LOGIN, not just the access token, has lapsed) or a refreshTokenExpiresAt already in
+        // the past means neither the CLI (`claude -p`) nor our own HTTP refresh can recover
+        // this -- only an interactive `/login` can. Detect it BEFORE any refresh/poll attempt
+        // so we never burn a CLI spawn or a network call on a login that cannot come back on
+        // its own, and never fall into the sticky-cooldown "waiting on Claude Code" limbo that
+        // has nothing actually coming.
+        var nowMsForClassify = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var loginState = LoginStatePolicy.Classify(
+            creds.RefreshToken is not null, creds.ExpiresAt, creds.RefreshTokenExpiresAt, nowMsForClassify);
+        if (loginState == LoginState.Dead)
+        {
+            _authLog.Log(
+                $"DEAD-LOGIN detected: token-source={credSource} expiresAt={creds.ExpiresAt} " +
+                $"({FormatMs(creds.ExpiresAt)}) with refreshToken present, " +
+                $"refreshTokenExpiresAt={creds.RefreshTokenExpiresAt} ({FormatMs(creds.RefreshTokenExpiresAt)}); " +
+                "skipping CLI/network refresh attempts -- only /login can fix this.");
+            throw new DeadLoginException();
+        }
+
         // At most ONE refresh attempt per poll cycle (same burst-protection discipline as
         // the poller's backoff). Proactive consumes the attempt; if it ran, reactive won't.
         bool refreshAttempted = false;
@@ -766,7 +787,7 @@ public sealed class UsageService
             ?? throw new InvalidOperationException("claudeAiOauth not found in credentials file.");
         if (oauth.AccessToken is null)
             throw new InvalidOperationException("Access token not found in credentials file.");
-        return new Credentials(oauth.AccessToken, oauth.RefreshToken, oauth.ExpiresAt);
+        return new Credentials(oauth.AccessToken, oauth.RefreshToken, oauth.ExpiresAt, oauth.RefreshTokenExpiresAt);
     }
 
     // Non-throwing variant for the keystore path so a malformed blob falls through to the file.
@@ -778,15 +799,17 @@ public sealed class UsageService
 
     // --- credentials models ---
 
-    internal sealed record Credentials(string AccessToken, string? RefreshToken, long ExpiresAt);
+    internal sealed record Credentials(
+        string AccessToken, string? RefreshToken, long ExpiresAt, long RefreshTokenExpiresAt = 0);
 
     private record CredentialsFile(
         [property: JsonPropertyName("claudeAiOauth")] OAuthCreds? ClaudeAiOauth);
 
     private record OAuthCreds(
-        [property: JsonPropertyName("accessToken")]  string? AccessToken,
-        [property: JsonPropertyName("refreshToken")] string? RefreshToken,
-        [property: JsonPropertyName("expiresAt")]    long ExpiresAt);
+        [property: JsonPropertyName("accessToken")]         string? AccessToken,
+        [property: JsonPropertyName("refreshToken")]        string? RefreshToken,
+        [property: JsonPropertyName("expiresAt")]            long   ExpiresAt,
+        [property: JsonPropertyName("refreshTokenExpiresAt")] long  RefreshTokenExpiresAt);
 }
 
 // Thrown by FetchAsync when a poll could not be authorized AND our own network refresh is
@@ -803,4 +826,15 @@ public sealed class RefreshRateLimitedException : Exception
     public RefreshRateLimitedException(long suppressedUntilMs)
         : base("Token refresh suppressed by sticky 429 cooldown; awaiting host disk refresh.")
         => SuppressedUntilMs = suppressedUntilMs;
+}
+
+// Thrown by FetchAsync when LoginStatePolicy classifies the on-disk/keystore token as a DEAD
+// login: a refresh token is present but there is nothing left to refresh from (expiresAt is
+// 0/unset, or refreshTokenExpiresAt has already passed). Distinct from an ordinary 401 and from
+// RefreshRateLimitedException -- no CLI or network refresh attempt can fix this, only a fresh
+// interactive `/login` in Claude Code. The poller surfaces this as a dedicated, honest
+// ConnectivityState.SignedOut rather than the "waiting on a refresh" banner.
+public sealed class DeadLoginException : Exception
+{
+    public DeadLoginException() : base("Claude Code login has lapsed; run /login to reconnect.") { }
 }
