@@ -491,6 +491,13 @@ public partial class App : Application
         builder.Services.AddSingleton<UsagePoller>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<UsagePoller>());
 
+        // Codex lane -- an INDEPENDENT failure domain (own state, own service, own poller). A Codex
+        // fault can never disturb the Claude services above.
+        builder.Services.AddSingleton<CodexUsageState>();
+        builder.Services.AddSingleton<CodexUsageService>();
+        builder.Services.AddSingleton<CodexPoller>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<CodexPoller>());
+
         var app = builder.Build();
 
         app.UseCors();
@@ -550,6 +557,17 @@ public partial class App : Application
 
         app.MapGet("/api/backoff", (UsageState state) =>
             Results.Ok(state.Backoff));
+
+        // Codex lane -- separate endpoints so the frontend polls it independently of Claude. Usage
+        // 404s until the first successful Codex poll; status is null until the first cycle (the UI
+        // treats null / noToken as "hide the Codex section").
+        app.MapGet("/api/codex/usage", (CodexUsageState state) =>
+            state.Current is { } data
+                ? Results.Ok(data)
+                : Results.NotFound(new { message = "No Codex data yet." }));
+
+        app.MapGet("/api/codex/status", (CodexUsageState state) =>
+            Results.Ok(state.Status));
 
         // Cumulative usage series for the stats graph. range = 1d | 7d | 30d (default 1d).
         // Returns the SESSION (five_hour) and WEEK (seven_day) series, each computed from
@@ -611,7 +629,20 @@ public partial class App : Application
                 ? body.AutoRefreshLogin
                 : settings.Current.AutoRefreshLogin;
 
-            var merged = body with { ClaudeCliPath = mergedCliPath, AutoRefreshLogin = mergedAutoRefresh };
+            // showUntrackedWindows is driven by its own inline toggle (POST /api/untracked-windows),
+            // so the main settings form omits it -- preserve the stored value unless a client
+            // explicitly sends the key, exactly as for autoRefreshLogin above.
+            var mergedShowUntracked = root.ValueKind == JsonValueKind.Object
+                                      && root.TryGetProperty("showUntrackedWindows", out _)
+                ? body.ShowUntrackedWindows
+                : settings.Current.ShowUntrackedWindows;
+
+            var merged = body with
+            {
+                ClaudeCliPath = mergedCliPath,
+                AutoRefreshLogin = mergedAutoRefresh,
+                ShowUntrackedWindows = mergedShowUntracked,
+            };
             settings.Save(merged);
             return Results.Ok(settings.Current with { StartWithWindows = settings.GetActualAutostart() });
         });
@@ -693,6 +724,15 @@ public partial class App : Application
                 }
             }
             return Results.Ok(new { ok = true });
+        });
+
+        // Persist the "show untracked windows" reveal toggle via its own endpoint (like
+        // /api/hints/dismiss) so a single-field update can't clobber the rest of settings the way a
+        // partial /api/settings POST would. Uses `Current with` to touch only the one field.
+        app.MapPost("/api/untracked-windows", (UntrackedWindowsRequest body, SettingsService settings) =>
+        {
+            settings.Save(settings.Current with { ShowUntrackedWindows = body?.Show ?? false });
+            return Results.Ok(new { ok = true, showUntrackedWindows = settings.Current.ShowUntrackedWindows });
         });
 
         // Selective reset / clear-data. Only ticked categories are cleared; all-false is a no-op.

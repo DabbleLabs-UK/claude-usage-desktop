@@ -104,7 +104,10 @@
     }
     .reconnecting-el.show { display: inline; }
 
-    #mainView.stale-mode {
+    /* Stale/backoff dimming applies to the CLAUDE column ONLY. The class still lives on
+       #mainView (set by updateBackoffBanner), but the filter must not reach #codexCol -- Codex is
+       an independent lane and may be perfectly live while Claude is stale. */
+    #mainView.stale-mode #claudeCol {
       filter: grayscale(35%) opacity(0.68);
       transition: filter 0.4s, opacity 0.4s;
     }
@@ -129,6 +132,24 @@
       flex-direction: column;
       gap: 6px;
       overflow-y: auto;
+    }
+
+    /* Each lane is a vertical stack of cards. Narrow (portrait): the two columns stack under
+       one another (main is flex-column). Wide (landscape): the media query below switches main
+       to a row so Claude and Codex sit side by side, each taking an equal share. */
+    .usage-col {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;   /* let the column shrink so its cards never clip at small widths */
+    }
+
+    @media (min-width: 680px) {
+      main {
+        flex-direction: row;
+        align-items: flex-start;   /* columns keep their natural height, top-aligned */
+      }
+      .usage-col { flex: 1 1 0; }
     }
 
     .hidden { display: none !important; }
@@ -424,6 +445,81 @@
     }
 
     .reset b { color: var(--text); font-weight: 600; }
+
+    /* ---- Codex lane ---- */
+    /* Panel header: "CODEX" label + a quiet "What's this?" explainer toggle. Mirrors the
+       backoff banner's affordance so both lanes feel like one system. */
+    .codex-panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 2px 2px 0;
+    }
+    .codex-panel-title {
+      font-size: 0.8rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+    .codex-whatsthis {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      font-size: 0.70rem;
+      color: var(--accent);
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      white-space: nowrap;
+    }
+    .codex-whatsthis:hover { opacity: 0.82; }
+    .codex-explain {
+      font-size: 0.72rem;
+      line-height: 1.45;
+      color: var(--dim);
+      padding: 4px 2px 2px;
+      max-width: 60ch;
+    }
+    .codex-explain strong { color: var(--text); font-weight: 600; }
+    /* Independent Codex banner -- a calm info strip; amber accent only when action is needed.
+       Kept entirely separate from the Claude backoff banner (different failure domain). */
+    .codex-banner {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 9px;
+      padding: 8px 12px;
+      font-size: 0.76rem;
+      color: var(--text);
+    }
+    .codex-banner.codex-action { border-left-color: var(--yellow); }
+    .codex-banner strong { font-weight: 700; }
+    /* Codex credits balance -- same shape as the Claude billing card. */
+    .codex-credits {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 11px 15px;
+    }
+
+    /* Unobtrusive reveal/hide link for untracked ("not tracked this period") windows. */
+    .untracked-toggle {
+      font-size: 0.68rem;
+      color: var(--accent);
+      text-align: center;
+      padding: 3px 0;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      opacity: 0.85;
+    }
+    .untracked-toggle:hover { opacity: 1; }
 
     .billing {
       background: var(--surface);
@@ -1003,7 +1099,13 @@
 </div>
 
 <main id="mainView">
-  <div class="loading">Loading...</div>
+  <!-- Two independent columns: Claude (left/top) and Codex (right/bottom). At a wide viewport
+       they sit side by side; when narrow they stack. The Codex column is hidden entirely until a
+       Codex login is detected. Each lane renders into its own container from its own data feed. -->
+  <section class="usage-col" id="claudeCol">
+    <div class="loading">Loading...</div>
+  </section>
+  <section class="usage-col codex-col hidden" id="codexCol"></section>
 </main>
 
 <div id="settingsView" class="settings-view hidden">
@@ -1346,6 +1448,15 @@
   let _backoffState           = null;
   let _lastGoodData           = null;
   let _lastFetchedAt          = null;
+  // Part 3: when false, windows the API reports as "not tracked this period" (null) are hidden
+  // behind an inline reveal toggle. Loaded from settings (showUntrackedWindows) at startup and
+  // whenever Settings loads; persisted via POST /api/untracked-windows.
+  let _showUntracked          = false;
+  // ---- Codex lane state (fully independent of the Claude state above) ----
+  let _codexData              = null;   // last CodexUsageData snapshot ({windows, creditsBalance, ...})
+  let _codexStatus            = null;   // last CodexStatus ({state}); null until the first Codex poll
+  let _codexCardDataMap       = {};     // detail-view lookup for Codex cards (kept separate from _cardDataMap)
+  let _codexExplainOpen       = false;  // "What's this?" explainer expanded state for the Codex panel
   // Per-window mid-period-reset tracking (keyed by the ORIGINAL API field name, e.g. five_hour,
   // seven_day). Anthropic sometimes resets a window's credit counter to 0 WITHOUT advancing
   // resetsAt -- utilization craters but the countdown keeps ticking through the same deadline.
@@ -1774,6 +1885,124 @@
     return ms / 3600000 < 24 ? 'this session' : 'this week';
   }
 
+  // ---- Codex lane rendering ----
+  // Card title derived from limit_window_seconds -- generic, never assuming which lane is which.
+  // 604800 -> "Weekly"/"Week", 86400 -> "Daily"/"Day", 18000 -> "5-hour"/"5h", etc.
+  function codexWindowName(seconds) {
+    const s = Number(seconds) || 0;
+    const hours = s / 3600;
+    if (hours > 0 && hours % 168 === 0) {
+      const w = hours / 168;
+      return { label: w === 1 ? 'Weekly' : w + '-week', compact: w === 1 ? 'Week' : w + 'w' };
+    }
+    if (hours > 0 && hours % 24 === 0) {
+      const d = hours / 24;
+      return { label: d === 1 ? 'Daily' : d + '-day', compact: d === 1 ? 'Day' : d + 'd' };
+    }
+    if (hours >= 1 && hours % 1 === 0) {
+      return { label: hours === 1 ? 'Hourly' : hours + '-hour', compact: hours + 'h' };
+    }
+    if (hours > 0) {
+      const h = +hours.toFixed(2);
+      return { label: h + '-hour', compact: h + 'h' };
+    }
+    return { label: 'Usage', compact: 'Usage' };
+  }
+
+  // Independent Codex banner text by state. Returns null when live (no banner). Deliberately says
+  // NOTHING about ChatGPT chat limits -- this lane measures Codex agentic usage only.
+  function _codexBannerText(state) {
+    if (state === 'signedOut')
+      return { action: true, text: 'Codex login expired &mdash; run <strong>codex login</strong> in the Codex CLI to resume usage tracking.' };
+    if (state === 'noNetwork')
+      return { action: false, text: "Can't reach Codex right now &mdash; will retry automatically." };
+    if (state === 'error')
+      return { action: false, text: 'Codex usage is temporarily unavailable &mdash; will retry automatically.' };
+    return null;
+  }
+
+  function renderCodex() {
+    const col = document.getElementById('codexCol');
+    const st = _codexStatus ? _codexStatus.state : null;
+    // No Codex login (or nothing known yet and no data) -> hide the entire section, no placeholder.
+    if (st === 'noToken' || (st === null && !_codexData)) {
+      col.classList.add('hidden');
+      col.innerHTML = '';
+      _codexCardDataMap = {};
+      return;
+    }
+    col.classList.remove('hidden');
+
+    let html = '';
+    // Panel header: the label is CODEX, never "ChatGPT" -- it measures Codex agentic usage, not
+    // ChatGPT chat message caps. The explainer says exactly that.
+    html += '<div class="codex-panel-head">'
+          + '<span class="codex-panel-title">Codex</span>'
+          + '<button type="button" class="codex-whatsthis" onclick="toggleCodexExplain()">'
+          + (_codexExplainOpen ? 'Hide' : "What&rsquo;s this?") + '</button>'
+          + '</div>';
+    if (_codexExplainOpen) {
+      html += '<div class="codex-explain">'
+            + 'These meters track your <strong>Codex</strong> (OpenAI&rsquo;s coding agent) usage limits &mdash; '
+            + 'the same rate limits the Codex CLI reports. They are <strong>not</strong> ChatGPT chat '
+            + 'message caps.'
+            + '</div>';
+    }
+
+    // Codex's own banner (auth/connectivity), independent of the Claude backoff banner.
+    const b = _codexBannerText(st);
+    if (b) html += '<div class="codex-banner' + (b.action ? ' codex-action' : '') + '">' + b.text + '</div>';
+
+    _codexCardDataMap = {};
+    const data = _codexData;
+    const windows = (data && data.windows) || [];
+    for (const w of windows) {
+      const { label, compact } = codexWindowName(w.limitWindowSeconds);
+      const windowMs = (Number(w.limitWindowSeconds) || 0) * 1000;
+      // Map the Codex window onto the shape card() expects, so it inherits the exact same bar,
+      // projection, countdown and detail affordance as the Claude cards (generic pass-through).
+      const cw = { utilization: w.usedPercent, resetsAt: w.resetAt || null };
+      // Keys must be unique: two lanes whose lengths render to the same display label would
+      // otherwise overwrite each other's map entry and open the wrong window's detail view.
+      let key = 'Codex ' + label;
+      if (_codexCardDataMap[key]) key += ' (' + w.limitWindowSeconds + 's)';
+      _codexCardDataMap[key] = { label: key, w: cw, windowMs, resetDetected: false, resetAnchorAt: null };
+      html += card(key, cw, windowMs || null, compact, true, false, null);
+    }
+    if (!windows.length && st === 'live')
+      html += '<div class="card dim"><div class="reset">No Codex usage reported yet this period.</div></div>';
+
+    // Credits balance -- surfaced only when the plan has credits (creditsBalance present).
+    if (data && typeof data.creditsBalance === 'number') {
+      html += '<div class="codex-credits"><span class="label">Codex credits</span>'
+            + '<span class="billing-amount">' + data.creditsBalance.toFixed(2) + '</span></div>';
+    }
+
+    col.innerHTML = html;
+
+    // If a CODEX card's detail view is currently open, refresh its content from this poll --
+    // otherwise the open detail would freeze at the values it had when opened. (The Claude
+    // render() has the equivalent block for its own cards.)
+    if (_openCardKey && _codexCardDataMap[_openCardKey]) _renderDetailContent(_openCardKey);
+  }
+
+  window.toggleCodexExplain = function() {
+    _codexExplainOpen = !_codexExplainOpen;
+    renderCodex();
+  };
+
+  // Reveal/hide untracked windows, persisting the choice via its own endpoint (a partial
+  // /api/settings POST would clobber the rest of settings -- see the dedicated endpoint).
+  window.toggleUntracked = function() {
+    _showUntracked = !_showUntracked;
+    if (lastData) render(lastData);
+    fetch('/api/untracked-windows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ show: _showUntracked }),
+    }).catch(function() {});
+  };
+
   function render(data) {
     lastData = data;
     // Remember the last payload that carries real windows as the fallback to show (dimmed)
@@ -1796,8 +2025,12 @@
     // since render() rebuilds mainView wholesale; dismissed-state lives in _dismissedHints).
     let html = renderHintCards();
 
-    // 1. Fixed known cards, always rendered (greyed when null/absent).
+    // 1. Fixed known cards, in order. By default an untracked window (null/absent, i.e. "not
+    //    tracked this period") is HIDDEN behind the reveal toggle below rather than rendered
+    //    permanently greyed -- unless the user has opted to show untracked windows. A window that
+    //    later returns real data (w != null) always renders, regardless of the toggle.
     const rendered = new Set();
+    let hiddenUntracked = 0;
     for (const key of WINDOW_ORDER) {
       rendered.add(key);
       let w = windows[key] || null;
@@ -1807,6 +2040,7 @@
         w = windows['session'];
         rendered.add('session');   // suppress duplicate card in step 2
       }
+      if (w === null && !_showUntracked) { hiddenUntracked++; continue; }
       const { label, compact } = windowNames(key);
       const windowMs = deriveWindowMs(key);
       const { resetDetected, resetAnchorAt } = windowResetState(key, w, isNewSample, sampleTime);
@@ -1827,9 +2061,20 @@
       html += card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt);
     }
 
+    // 2b. Reveal / hide affordance for untracked windows (choice persisted in settings).
+    if (hiddenUntracked > 0) {
+      html += '<div class="untracked-toggle" onclick="toggleUntracked()">Show ' + hiddenUntracked
+            + ' window' + (hiddenUntracked === 1 ? '' : 's') + ' not tracked this period</div>';
+    } else if (_showUntracked) {
+      const untrackedShown = WINDOW_ORDER.filter(k =>
+        !windows[k] && !(k === 'five_hour' && windows['session'])).length;
+      if (untrackedShown > 0)
+        html += '<div class="untracked-toggle" onclick="toggleUntracked()">Hide untracked windows</div>';
+    }
+
     // 3. Billing card last (below the fold).
     html += billingCard(data.extraUsage);
-    document.getElementById('mainView').innerHTML = html;
+    document.getElementById('claudeCol').innerHTML = html;
 
     if (isNewSample) _lastTrackedFetchedAt = data.fetchedAt;
     _lastFetchedAt = new Date(data.fetchedAt).getTime();
@@ -2031,8 +2276,10 @@
         si.classList.remove('hidden');
       }
     } else if (!lastData) {
-      // No cache at all — clear loading so the banner is the sole indicator.
-      if (mv && mv.querySelector('.loading')) mv.innerHTML = '';
+      // No cache at all — clear the Claude column's loading text so the banner is the sole
+      // indicator. Clear ONLY the Claude column, never mainView (that would drop the Codex column).
+      const cc = document.getElementById('claudeCol');
+      if (cc && cc.querySelector('.loading')) cc.innerHTML = '';
       if (si) si.classList.add('hidden');
     }
 
@@ -2188,11 +2435,14 @@
     document.getElementById('statsView').classList.add('hidden');
   }
 
-  window.openDetail = function(cardKey) {
-    const d = _cardDataMap[cardKey];
-    if (!d || !d.w) return;
-    history.pushState({ view: 'detail', cardKey: cardKey }, '');
-    _openCardKey = cardKey;
+  // Populates the detail view's CONTENT for a card key, and returns whether it could.
+  // Split out of openDetail so a fresh poll can refresh an ALREADY-OPEN detail view without
+  // re-pushing history or re-switching views -- used by both the Claude render() refresh block
+  // and renderCodex(), so a Codex detail view updates on Codex polls just like a Claude one.
+  function _renderDetailContent(cardKey) {
+    // Claude and Codex keep separate card maps (independent lanes); the detail view serves both.
+    const d = _cardDataMap[cardKey] || _codexCardDataMap[cardKey];
+    if (!d || !d.w) return false;
     const { label, w, windowMs, resetDetected, resetAnchorAt } = d;
     const win = humanWindow(windowMs);
     document.getElementById('detailTitle').textContent = label;
@@ -2240,6 +2490,15 @@
     document.getElementById('explainActual').textContent = w.resetsAt
       ? 'Usage so far in this ' + win + ' window, as a % of the rate limit. Resets in ' + timeUntilSec(w.resetsAt) + '.'
       : 'Usage so far in this window, as a % of the rate limit.';
+    return true;
+  }
+
+  window.openDetail = function(cardKey) {
+    const d = _cardDataMap[cardKey] || _codexCardDataMap[cardKey];
+    if (!d || !d.w) return;
+    history.pushState({ view: 'detail', cardKey: cardKey }, '');
+    _openCardKey = cardKey;
+    if (!_renderDetailContent(cardKey)) return;
     _hideAllViews();
     document.getElementById('detailView').classList.remove('hidden');
     _checkToolbarOverflow();
@@ -2254,6 +2513,20 @@
   window.closeDetail = closeDetail;
 
   conn.on('usageUpdated', render);
+
+  // Codex lane: independent hub messages + initial REST fetch. A Codex update never touches the
+  // Claude render path, and vice versa.
+  conn.on('codexUsageUpdated', function(d) { _codexData = d; renderCodex(); });
+  conn.on('codexStatusUpdated', function(s) { _codexStatus = s; renderCodex(); });
+
+  fetch('/api/codex/status')
+    .then(r => r.ok ? r.json() : undefined)
+    .then(s => { if (s !== undefined) { _codexStatus = s; renderCodex(); } })
+    .catch(function() {});
+  fetch('/api/codex/usage')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) { _codexData = d; renderCodex(); } })
+    .catch(function() {});
 
   // ---- Restart-detection: poll /api/instance while disconnected ----
   // Fires location.reload() as soon as the new server answers with a
@@ -2343,6 +2616,11 @@
       setInterval(function() {
         fetch('/api/usage').then(r => r.ok ? r.json() : null)
           .then(d => { if (d) render(d); }).catch(function() {});
+        // Poll the Codex lane on the same fallback cadence (independent of the Claude fetch).
+        fetch('/api/codex/usage').then(r => r.ok ? r.json() : null)
+          .then(d => { if (d) { _codexData = d; renderCodex(); } }).catch(function() {});
+        fetch('/api/codex/status').then(r => r.ok ? r.json() : undefined)
+          .then(s => { if (s !== undefined) { _codexStatus = s; renderCodex(); } }).catch(function() {});
       }, 15000);
       return;
     }
@@ -2683,6 +2961,17 @@
   }
   initOnboarding();
 
+  // Load the untracked-windows reveal preference for ALL clients (initOnboarding is desktop-only).
+  fetch('/api/settings')
+    .then(r => r.ok ? r.json() : null)
+    .then(s => {
+      if (s && typeof s.showUntrackedWindows === 'boolean' && s.showUntrackedWindows !== _showUntracked) {
+        _showUntracked = s.showUntrackedWindows;
+        if (lastData) render(lastData);
+      }
+    })
+    .catch(function() {});
+
   // ---- Reset / clear data ----
   // Independent checkboxes -> a confirm step -> POST /api/reset. Only ticked items are cleared;
   // usage logs are off by default and need a second explicit tick. After clearing, the server
@@ -3000,6 +3289,12 @@
       // (applyPhoneAccessSlot, below) renders the actual phone-access UI from this; there is no
       // longer a separate inline status row.
       _onboard.firewallDone = !!s.firewallSetupDone;
+
+      // Keep the untracked-windows reveal preference in sync with persisted state.
+      if (typeof s.showUntrackedWindows === 'boolean' && s.showUntrackedWindows !== _showUntracked) {
+        _showUntracked = s.showUntrackedWindows;
+        if (lastData) render(lastData);
+      }
     } catch (e) {
       const msg = document.getElementById('saveMsg');
       msg.style.color = 'var(--red)';

@@ -30,10 +30,19 @@ public record AppSettings(
     // .json; both are found automatically. IMPORTANT: this must be a REAL OAuth access token -- a
     // `claude setup-token` value does NOT work (it is inference-scoped; the usage endpoint returns
     // 403). Not a UI field -- edited directly in settings.json (held in %APPDATA%\ClaudeUsage).
-    string? ClaudeCodeOauthToken = null);
+    string? ClaudeCodeOauthToken = null,
+    // When OFF (default), windows the API reports as "not tracked this period" (null, e.g.
+    // SONNET (7-DAY) / OPUS (7-DAY) on a plan that doesn't split them) are hidden from the home
+    // view behind a small "show N not tracked" toggle, instead of rendering permanently greyed.
+    // A window that later returns real data reappears automatically regardless of this flag.
+    // Toggled via the inline reveal link (POST /api/untracked-windows).
+    bool ShowUntrackedWindows = false);
 
 // Body for POST /api/hints/dismiss — the id of the hint card being dismissed.
 public record HintDismissRequest(string Id);
+
+// Body for POST /api/untracked-windows — persists the "show untracked windows" reveal toggle.
+public record UntrackedWindowsRequest(bool Show);
 
 // Body for POST /api/reset — independent flags for the selective clear-data feature. Only the
 // ticked categories are cleared; all-false is a no-op. Restart=false (default) closes the app.

@@ -49,14 +49,26 @@ internal static class WindowsCredentialStore
     // Returns the raw credential JSON string for Claude Code's keystore entry (and the target name
     // it was found under, for diagnostics), or null if none.
     public static string? TryReadClaudeCredentialJson(out string? matchedTarget)
+        => FindFirstMatching(LooksLikeClaudeOauth, out matchedTarget);
+
+    // Returns the raw Codex auth.json content for Codex's keystore entry (and the target name it
+    // was found under), or null if none. Codex's cli_auth_credentials_store, when pointed at the
+    // OS keyring, stores the SAME auth.json JSON there; we match by BLOB CONTENT (an access_token
+    // + account_id combination) rather than target name, exactly as for Claude, since the keytar
+    // service/account naming is version-dependent and may not contain "codex" at all. READ-ONLY.
+    public static string? TryReadCodexAuthJson(out string? matchedTarget)
+        => FindFirstMatching(LooksLikeCodexAuth, out matchedTarget);
+
+    // Enumerates every GENERIC credential and returns the first whose decoded blob satisfies
+    // `predicate`, matching by content in managed code (the native filter only does target-name
+    // prefix matching, which can't find an entry whose name doesn't contain the app name).
+    private static string? FindFirstMatching(Func<string, bool> predicate, out string? matchedTarget)
     {
         matchedTarget = null;
         if (!OperatingSystem.IsWindows()) return null;
         try
         {
-            // Enumerate ALL credentials (filter must be null when the ALL flag is set) and match by
-            // blob content in managed code -- the native filter only does target-name prefix
-            // matching, which can't find an entry whose name doesn't contain "claude".
+            // Filter must be null when the ALL flag is set.
             if (!CredEnumerate(null, CRED_ENUMERATE_ALL_CREDENTIALS, out var count, out var pCreds))
                 return null;
             try
@@ -69,9 +81,9 @@ internal static class WindowsCredentialStore
                     var cred = Marshal.PtrToStructure<CREDENTIAL>(entryPtr);
                     if (cred.Type != CRED_TYPE_GENERIC) continue;
 
-                    // DecodeBlob returns non-null only when the blob is Claude's OAuth JSON, so this
-                    // identifies the entry by content regardless of its target name.
-                    var json = DecodeBlob(cred.CredentialBlob, cred.CredentialBlobSize);
+                    // DecodeBlob returns non-null only when the blob text matches the predicate, so
+                    // this identifies the entry by content regardless of its target name.
+                    var json = DecodeBlob(cred.CredentialBlob, cred.CredentialBlobSize, predicate);
                     if (json is not null)
                     {
                         matchedTarget = cred.TargetName != IntPtr.Zero
@@ -90,21 +102,50 @@ internal static class WindowsCredentialStore
         return null;
     }
 
-    // Decodes the credential blob to text, returning it only if it parses as Claude's OAuth JSON.
+    // Decodes the credential blob to text, returning it only if it satisfies `predicate`.
     // keytar builds have written the password as either UTF-8 or UTF-16LE, so we try both.
-    private static string? DecodeBlob(IntPtr blob, uint size)
+    private static string? DecodeBlob(IntPtr blob, uint size, Func<string, bool> predicate)
     {
         if (blob == IntPtr.Zero || size == 0) return null;
         var bytes = new byte[size];
         Marshal.Copy(blob, bytes, 0, (int)size);
 
         var utf16 = Encoding.Unicode.GetString(bytes);
-        if (LooksLikeClaudeOauth(utf16)) return utf16;
+        if (predicate(utf16)) return utf16;
 
         var utf8 = Encoding.UTF8.GetString(bytes);
-        if (LooksLikeClaudeOauth(utf8)) return utf8;
+        if (predicate(utf8)) return utf8;
 
         return null;
+    }
+
+    // Codex auth.json signature: JSON carrying an OAuth access_token AND an account_id (either
+    // nested under a "tokens" object or top-level). Requiring BOTH avoids matching unrelated
+    // credentials from other apps that merely contain an "access_token" field.
+    private static bool LooksLikeCodexAuth(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)
+            || s.IndexOf("access_token", StringComparison.Ordinal) < 0
+            || s.IndexOf("account_id", StringComparison.Ordinal) < 0)
+            return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(s);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+
+            var scope = root.TryGetProperty("tokens", out var tokens)
+                        && tokens.ValueKind == JsonValueKind.Object
+                ? tokens : root;
+
+            var hasAccess = scope.TryGetProperty("access_token", out var at)
+                            && at.ValueKind == JsonValueKind.String
+                            && !string.IsNullOrWhiteSpace(at.GetString());
+            var hasAccount = scope.TryGetProperty("account_id", out var ai)
+                             && ai.ValueKind == JsonValueKind.String;
+            return hasAccess && hasAccount;
+        }
+        catch { return false; }
     }
 
     private static bool LooksLikeClaudeOauth(string s)

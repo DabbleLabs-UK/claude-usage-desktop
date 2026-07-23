@@ -163,6 +163,43 @@ public sealed class PollLog
         catch { /* best-effort */ }
     }
 
+    // --- Codex lane -------------------------------------------------------------------------
+    // The Codex poller is an independent failure domain, but its polls are logged to the SAME
+    // poll.log in the same "yyyy-MM-dd HH:mm:ss.fff  <message>" style, prefixed CODEX, so both
+    // lanes' successes and failures are diagnosable side-by-side after the fact. Each window is
+    // logged by its limit_window_seconds (the field the card title is derived from) so the log
+    // reads the same way regardless of which lanes the plan populates.
+    public void LogCodexSuccess(string source, CodexUsageData data)
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            foreach (var w in data.Windows)
+            {
+                var resets = w.ResetAt?.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'",
+                                CultureInfo.InvariantCulture);
+                sb.Append(' ').Append(w.LimitWindowSeconds).Append("s=")
+                  .Append(w.UsedPercent.ToString("0.##", CultureInfo.InvariantCulture)).Append('%')
+                  .Append('@').Append(resets ?? "no-reset");
+            }
+
+            var credits = data.CreditsBalance is { } b
+                ? b.ToString("0.##", CultureInfo.InvariantCulture)
+                : "off";
+
+            Write($"CODEX POLL ok stale={data.IsStale} src=\"{source}\" " +
+                  $"fetchedAt={data.FetchedAt.ToUniversalTime():yyyy-MM-dd'T'HH:mm:ss'Z'} " +
+                  $"windows:{sb} credits={credits}");
+        }
+        catch { /* best-effort */ }
+    }
+
+    public void LogCodexFailure(string reason)
+    {
+        try { Write($"CODEX POLL fail stale=True: {reason}"); }
+        catch { /* best-effort */ }
+    }
+
     private void Write(string message)
     {
         var stamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
