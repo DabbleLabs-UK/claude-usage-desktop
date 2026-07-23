@@ -446,44 +446,22 @@
 
     .reset b { color: var(--text); font-weight: 600; }
 
-    /* ---- Codex lane ---- */
-    /* Panel header: "CODEX" label + a quiet "What's this?" explainer toggle. Mirrors the
-       backoff banner's affordance so both lanes feel like one system. */
-    .codex-panel-head {
+    /* ---- Panel headings ---- */
+    /* Shared "CLAUDE" / "CODEX" section label, used above both lanes so they read as one system. */
+    .panel-head {
       display: flex;
       justify-content: space-between;
       align-items: baseline;
       padding: 2px 2px 0;
     }
-    .codex-panel-title {
+    .panel-title {
       font-size: 0.8rem;
       font-weight: 800;
       letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--text);
     }
-    .codex-whatsthis {
-      flex-shrink: 0;
-      background: none;
-      border: none;
-      padding: 0;
-      font: inherit;
-      font-size: 0.70rem;
-      color: var(--accent);
-      cursor: pointer;
-      text-decoration: underline;
-      text-underline-offset: 2px;
-      white-space: nowrap;
-    }
-    .codex-whatsthis:hover { opacity: 0.82; }
-    .codex-explain {
-      font-size: 0.72rem;
-      line-height: 1.45;
-      color: var(--dim);
-      padding: 4px 2px 2px;
-      max-width: 60ch;
-    }
-    .codex-explain strong { color: var(--text); font-weight: 600; }
+    /* ---- Codex lane ---- */
     /* Independent Codex banner -- a calm info strip; amber accent only when action is needed.
        Kept entirely separate from the Claude backoff banner (different failure domain). */
     .codex-banner {
@@ -1456,7 +1434,6 @@
   let _codexData              = null;   // last CodexUsageData snapshot ({windows, creditsBalance, ...})
   let _codexStatus            = null;   // last CodexStatus ({state}); null until the first Codex poll
   let _codexCardDataMap       = {};     // detail-view lookup for Codex cards (kept separate from _cardDataMap)
-  let _codexExplainOpen       = false;  // "What's this?" explainer expanded state for the Codex panel
   // Per-window mid-period-reset tracking (keyed by the ORIGINAL API field name, e.g. five_hour,
   // seven_day). Anthropic sometimes resets a window's credit counter to 0 WITHOUT advancing
   // resetsAt -- utilization craters but the countdown keeps ticking through the same deadline.
@@ -1935,19 +1912,8 @@
 
     let html = '';
     // Panel header: the label is CODEX, never "ChatGPT" -- it measures Codex agentic usage, not
-    // ChatGPT chat message caps. The explainer says exactly that.
-    html += '<div class="codex-panel-head">'
-          + '<span class="codex-panel-title">Codex</span>'
-          + '<button type="button" class="codex-whatsthis" onclick="toggleCodexExplain()">'
-          + (_codexExplainOpen ? 'Hide' : "What&rsquo;s this?") + '</button>'
-          + '</div>';
-    if (_codexExplainOpen) {
-      html += '<div class="codex-explain">'
-            + 'These meters track your <strong>Codex</strong> (OpenAI&rsquo;s coding agent) usage limits &mdash; '
-            + 'the same rate limits the Codex CLI reports. They are <strong>not</strong> ChatGPT chat '
-            + 'message caps.'
-            + '</div>';
-    }
+    // ChatGPT chat message caps.
+    html += '<div class="panel-head"><span class="panel-title">Codex</span></div>';
 
     // Codex's own banner (auth/connectivity), independent of the Claude backoff banner.
     const b = _codexBannerText(st);
@@ -1986,11 +1952,6 @@
     if (_openCardKey && _codexCardDataMap[_openCardKey]) _renderDetailContent(_openCardKey);
   }
 
-  window.toggleCodexExplain = function() {
-    _codexExplainOpen = !_codexExplainOpen;
-    renderCodex();
-  };
-
   // Reveal/hide untracked windows, persisting the choice via its own endpoint (a partial
   // /api/settings POST would clobber the rest of settings -- see the dedicated endpoint).
   window.toggleUntracked = function() {
@@ -2021,9 +1982,12 @@
     // server-observed fetch time, not client Date.now(), keeps the anchor consistent regardless of
     // when the browser happens to render it.
     const sampleTime = data && data.fetchedAt ? new Date(data.fetchedAt).getTime() : null;
+    // Panel header: mirrors the Codex lane's heading so the two sections read as one system.
+    let html = '<div class="panel-head"><span class="panel-title">Claude</span></div>';
+
     // Dismissible hint cards render at the top of the home view (re-emitted on every render
     // since render() rebuilds mainView wholesale; dismissed-state lives in _dismissedHints).
-    let html = renderHintCards();
+    html += renderHintCards();
 
     // 1. Fixed known cards, in order. By default an untracked window (null/absent, i.e. "not
     //    tracked this period") is HIDDEN behind the reveal toggle below rather than rendered
