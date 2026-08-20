@@ -1427,6 +1427,16 @@
   let _backoffState           = null;
   let _lastGoodData           = null;
   let _lastFetchedAt          = null;
+  // ---- Live-link watchdog state (see the watchdog section far below) ----
+  // Anti-freeze safety net that is INDEPENDENT of SignalR's own state machine. The push channel
+  // can die silently (laptop sleep/wake, WebView2 suspension, a half-open socket) leaving
+  // conn.state === 'Connected' while no message ever arrives again -- so none of SignalR's
+  // onreconnecting/onclose handlers fire and the UI froze on stale numbers for hours. These track
+  // wall-clock silence so a watchdog timer can notice and force-heal over plain HTTP.
+  let _lastServerContactAt    = Date.now();  // last SUCCESSFUL backend contact (SignalR msg OR HTTP fetch)
+  let _lastPushAt             = 0;           // last SignalR push specifically (0 = none yet this session)
+  let _uiConnLost             = false;       // true once the watchdog has declared the live link lost
+  let _lastWatchdogWallClock  = Date.now();  // previous watchdog tick time, for sleep/suspend gap detection
   // Part 3: when false, windows the API reports as "not tracked this period" (null) are hidden
   // behind an inline reveal toggle. Loaded from settings (showUntrackedWindows) at startup and
   // whenever Settings loads; persisted via POST /api/untracked-windows.
@@ -2221,6 +2231,17 @@
     const banner = document.getElementById('backoffBanner');
     const si = document.getElementById('backoffStaleInfo');
     const mv = document.getElementById('mainView');
+    // HONESTY GUARD: while the watchdog has declared the live link lost, the backoff banner would
+    // be showing whatever state the now-dead channel last delivered -- e.g. a "signed out" that is
+    // no longer true. The reconnecting pill is the honest indicator for that case, so suppress the
+    // backoff banner entirely until a fresh /api/backoff re-fetch clears _uiConnLost. (The per-second
+    // ticker calls this too, so without the guard it would keep re-showing the stale banner.)
+    if (_uiConnLost) {
+      banner.classList.add('hidden');
+      banner.classList.remove('backoff-action');
+      if (si) si.classList.add('hidden');
+      return;
+    }
     if (!_backoffState) {
       banner.classList.add('hidden');
       banner.classList.remove('backoff-action');
@@ -2290,6 +2311,7 @@
         state: 'Disconnected' };
 
   conn.on('backoffUpdated', function(info) {
+    _markServerContact(true);
     _backoffState = info;
     updateBackoffBanner();
   });
@@ -2482,12 +2504,12 @@
   }
   window.closeDetail = closeDetail;
 
-  conn.on('usageUpdated', render);
+  conn.on('usageUpdated', function(d) { _markServerContact(true); render(d); });
 
   // Codex lane: independent hub messages + initial REST fetch. A Codex update never touches the
   // Claude render path, and vice versa.
-  conn.on('codexUsageUpdated', function(d) { _codexData = d; renderCodex(); });
-  conn.on('codexStatusUpdated', function(s) { _codexStatus = s; renderCodex(); });
+  conn.on('codexUsageUpdated', function(d) { _markServerContact(true); _codexData = d; renderCodex(); });
+  conn.on('codexStatusUpdated', function(s) { _markServerContact(true); _codexStatus = s; renderCodex(); });
 
   fetch('/api/codex/status')
     .then(r => r.ok ? r.json() : undefined)
@@ -2505,6 +2527,160 @@
 
   function _setReconnecting(active) {
     document.getElementById('reconnectingEl').classList.toggle('show', active);
+  }
+
+  // ---- Live-link watchdog ---------------------------------------------------------------------
+  // WHY THIS EXISTS: every recovery path above (onreconnecting / onreconnected / onclose ->
+  // startReconnectPolling) hangs off SignalR's OWN connection-state machine. That machine can wedge
+  // -- a laptop sleep/wake, a WebView2 suspension, or a half-open TCP can leave conn.state at
+  // 'Connected' while no message ever arrives again, so NONE of those callbacks fire. The result is
+  // the reported bug: the backend polled fine for hours (poll.log full of "POLL ok stale=False")
+  // while the UI sat frozen on stale numbers and a stale banner until a manual relaunch. This
+  // watchdog is deliberately INDEPENDENT of SignalR: it measures wall-clock silence and force-heals
+  // over plain HTTP (the local Kestrel is always up), so the UI can NEVER be stale-for-hours again.
+
+  const WATCHDOG_TICK_MS = 20 * 1000;    // how often we check for silence
+  const BASE_PUSH_MS     = 180 * 1000;   // healthy backend push cadence (UsagePoller.BaseIntervalSec)
+  const SLEEP_GAP_MS     = 60 * 1000;    // a tick this much late => the machine was suspended
+
+  // Silence we tolerate before treating the live link as lost. ~2.5x the expected push cadence so a
+  // healthy channel (a push every ~180s) never trips it, but a dead one is caught in minutes not
+  // hours. Scales with the backoff interval the backend told us about, so a legitimately slow
+  // (backed-off) cadence doesn't false-alarm; the active HTTP re-fetch refreshes the clock anyway.
+  function _silenceThresholdMs() {
+    const ivSec = _backoffState && _backoffState.intervalSeconds ? _backoffState.intervalSeconds : 0;
+    const iv = Math.max(ivSec * 1000, BASE_PUSH_MS);
+    return iv * 2 + 30 * 1000;
+  }
+
+  // Record a proven backend contact (a SignalR message OR any successful HTTP fetch). Clears the
+  // "live link lost" state, since we just demonstrated the link works.
+  function _markServerContact(fromPush) {
+    _lastServerContactAt = Date.now();
+    if (fromPush) _lastPushAt = _lastServerContactAt;
+    if (_uiConnLost) _setUiConnLost(false);
+  }
+
+  function _refreshReconnectingText(silenceMs) {
+    const el = document.getElementById('reconnectingEl');
+    if (!el) return;
+    const mins = Math.floor(silenceMs / 60000);
+    el.textContent = mins >= 1
+      ? 'Reconnecting… (no update in ' + mins + 'm)'
+      : 'Reconnecting…';
+  }
+
+  // The HONEST client-connection indicator. This is a "the UI lost its live link" state -- kept
+  // deliberately DISTINCT from the backend's signed-out / auth banner so the user is never told
+  // they're signed out when they aren't. While lost we show the reconnecting pill and suppress the
+  // (possibly stale/misleading) backoff banner; on recovery we restore the true backoff state.
+  function _setUiConnLost(lost) {
+    if (lost === _uiConnLost && lost) return;   // already lost; caller refreshes the text itself
+    _uiConnLost = lost;
+    _setReconnecting(lost);
+    if (lost) {
+      _refreshReconnectingText(Date.now() - _lastServerContactAt);
+      // updateBackoffBanner() (guarded on _uiConnLost) will hide the stale banner on its next call;
+      // hide it now too so the honesty flip is immediate rather than up-to-1s later.
+      const banner = document.getElementById('backoffBanner');
+      if (banner) banner.classList.add('hidden');
+    } else {
+      updateBackoffBanner();   // restore the real, freshly-known backoff state (or hide if none)
+    }
+  }
+
+  // Force an immediate, SignalR-INDEPENDENT recovery. Pulls current state over plain HTTP so the UI
+  // self-heals even when the push channel is a zombie, detects a backend restart (hard reload), and
+  // revives SignalR (a clean stop+reconnect when hardReset is asked for -- the zombie case). Safe to
+  // call often; every fetch hits the local Kestrel. Returns nothing; updates the UI as a side effect.
+  async function forceRecovery(reason, hardReset) {
+    console.log('[CU] forceRecovery (' + reason + ')' + (hardReset ? ' [hard-reset]' : ''));
+
+    // 1. Backend restarted? A changed instance id means this page is talking to a dead process --
+    //    reload so we bind to the new one (same check the reconnect poller does).
+    const newId = await fetchInstanceId();
+    if (newId) {
+      if (_instanceId && newId !== _instanceId) {
+        console.log('[CU] forceRecovery: instance id changed -> reloading');
+        location.reload();
+        return;
+      }
+      if (!_instanceId) _instanceId = newId;
+      _markServerContact(false);   // reaching /api/instance proves the local link is alive
+    }
+
+    // 2. Re-pull the authoritative current state over HTTP (bypasses the possibly-dead push channel).
+    //    Backoff first so the banner reflects the TRUE state (this is what corrects a stale
+    //    "signed out" left frozen on screen), then usage.
+    try {
+      const [u, b] = await Promise.all([
+        fetch('/api/usage').then(r => r.ok ? r.json() : null).catch(function() { return null; }),
+        fetch('/api/backoff').then(r => r.ok ? r.json() : null).catch(function() { return null; }),
+      ]);
+      _backoffState = b || null;
+      _markServerContact(false);   // clears _uiConnLost so updateBackoffBanner shows the real state
+      updateBackoffBanner();
+      if (u) render(u);
+    } catch (e) {
+      console.warn('[CU] forceRecovery usage/backoff fetch failed', e);
+    }
+
+    // Codex lane too (independent feed).
+    fetch('/api/codex/usage').then(r => r.ok ? r.json() : null)
+      .then(function(d) { if (d) { _codexData = d; renderCodex(); _markServerContact(false); } }).catch(function() {});
+    fetch('/api/codex/status').then(r => r.ok ? r.json() : undefined)
+      .then(function(s) { if (s !== undefined) { _codexStatus = s; renderCodex(); _markServerContact(false); } }).catch(function() {});
+
+    // 3. Revive the push channel so we return to low-latency updates rather than living on the poll.
+    if (_signalrLoaded) {
+      if (conn.state === signalR.HubConnectionState.Disconnected) {
+        trySignalRRestart();
+      } else if (hardReset && conn.state === signalR.HubConnectionState.Connected) {
+        // Zombie: SignalR claims Connected but nothing arrives. A clean stop() fires onclose, which
+        // routes into startReconnectPolling -> trySignalRRestart, rebuilding a live connection.
+        console.log('[CU] forceRecovery: stopping a zombie SignalR connection to force a clean reconnect');
+        conn.stop().catch(function() {});
+      }
+    }
+  }
+
+  // Only recover if we haven't heard from the backend recently -- avoids spamming fetches when an
+  // event (tab focus, network 'online') fires while the channel is perfectly healthy.
+  function _recoverIfStale(reason, minSilenceMs) {
+    if (Date.now() - _lastServerContactAt > (minSilenceMs || 30 * 1000)) forceRecovery(reason);
+  }
+
+  function _watchdogTick() {
+    const now = Date.now();
+
+    // Sleep/suspend detection: a tick that arrives far later than scheduled means the machine was
+    // asleep and every timer (including SignalR's own serverTimeout) was frozen -- so the push
+    // channel is almost certainly stale even if it still claims Connected. Recover immediately and
+    // hard-reset SignalR to shed any zombie socket.
+    const lateBy = now - _lastWatchdogWallClock - WATCHDOG_TICK_MS;
+    _lastWatchdogWallClock = now;
+    if (lateBy > SLEEP_GAP_MS) {
+      const sleptSec = Math.round((lateBy + WATCHDOG_TICK_MS) / 1000);
+      console.log('[CU] Watchdog: ' + sleptSec + 's gap (sleep/suspend) -> recovering');
+      _setUiConnLost(true);
+      forceRecovery('sleep/wake gap ' + sleptSec + 's', true);
+      return;
+    }
+
+    const silence = now - _lastServerContactAt;
+    if (silence < _silenceThresholdMs()) return;   // healthy: heard from the backend recently
+
+    // Sustained silence: declare the live link lost (honest pill, suppress stale banner) and force a
+    // recovery. If SignalR still claims Connected while this stale, it's a zombie -> hard-reset it.
+    const zombie = _signalrLoaded && _lastPushAt > 0 && conn.state === signalR.HubConnectionState.Connected;
+    if (!_uiConnLost) {
+      console.log('[CU] Watchdog: no backend contact for ' + Math.round(silence / 1000) + 's -> live link lost, recovering'
+        + (zombie ? ' (SignalR zombie: claims Connected but silent)' : ''));
+      _setUiConnLost(true);
+    } else {
+      _refreshReconnectingText(silence);
+    }
+    forceRecovery('watchdog silence ' + Math.round(silence / 1000) + 's', zombie);
   }
 
   function startReconnectPolling() {
@@ -2536,10 +2712,10 @@
       console.log('[CU] Restarting SignalR manually...');
       await conn.start();
       console.log('[CU] SignalR manual restart OK');
-      _setReconnecting(false);
+      _setUiConnLost(false);
       fetch('/api/usage')
         .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d) render(d); })
+        .then(d => { if (d) { _markServerContact(false); render(d); } })
         .catch(function() {});
     } catch (e) {
       console.warn('[CU] Manual restart failed, retrying in 3s', e);
@@ -2555,7 +2731,7 @@
 
   conn.onreconnected(async connectionId => {
     console.log('[CU] SignalR reconnected (connectionId=' + connectionId + ')');
-    _setReconnecting(false);
+    _setUiConnLost(false);
     if (_reconnectPollTimer !== null) { clearInterval(_reconnectPollTimer); _reconnectPollTimer = null; }
     const newId = await fetchInstanceId();
     console.log('[CU] Instance id check: stored=' + _instanceId + ' live=' + newId);
@@ -2568,7 +2744,7 @@
     console.log('[CU] Same instance id -- fetching current usage');
     fetch('/api/usage')
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) render(d); })
+      .then(d => { if (d) { _markServerContact(false); render(d); } })
       .catch(function() {});
   });
 
@@ -2585,7 +2761,10 @@
       console.warn('[CU] SignalR client unavailable -- falling back to polling /api/usage every 15s');
       setInterval(function() {
         fetch('/api/usage').then(r => r.ok ? r.json() : null)
-          .then(d => { if (d) render(d); }).catch(function() {});
+          .then(d => { if (d) { _markServerContact(false); render(d); } }).catch(function() {});
+        // Refresh the backoff banner too so a no-hub client still gets honest state transitions.
+        fetch('/api/backoff').then(r => r.ok ? r.json() : null)
+          .then(d => { _markServerContact(false); _backoffState = d || null; updateBackoffBanner(); }).catch(function() {});
         // Poll the Codex lane on the same fallback cadence (independent of the Claude fetch).
         fetch('/api/codex/usage').then(r => r.ok ? r.json() : null)
           .then(d => { if (d) { _codexData = d; renderCodex(); } }).catch(function() {});
@@ -2605,13 +2784,37 @@
 
   fetch('/api/usage')
     .then(r => r.ok ? r.json() : null)
-    .then(d => { if (d) render(d); })
+    .then(d => { if (d) { _markServerContact(false); render(d); } })
     .catch(e => console.warn('[CU] Initial fetch failed:', e));
 
   // Store instance id on first load; reconnects compare against this.
   fetchInstanceId().then(id => {
     if (id) { _instanceId = id; console.log('[CU] Instance id stored on load:', id); }
     else { console.warn('[CU] Failed to fetch initial instance id'); }
+  });
+
+  // ---- Start the live-link watchdog + wake/visibility triggers --------------------------------
+  // The periodic watchdog is the always-on safety net (catches silent/zombie drops). The event
+  // hooks give an INSTANT recovery on the common triggers -- returning to the tab, the machine
+  // waking, or the network coming back -- instead of waiting up to one watchdog tick.
+  setInterval(_watchdogTick, WATCHDOG_TICK_MS);
+
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'visible') {
+      // A tab that was hidden for a while may have had its timers throttled/frozen; re-sync now.
+      _lastWatchdogWallClock = Date.now();   // don't let the resume be misread as a fresh sleep gap
+      _recoverIfStale('tab visible');
+    }
+  });
+  window.addEventListener('focus',  function() { _recoverIfStale('window focus'); });
+  window.addEventListener('online', function() {
+    // Network came back -- recover regardless of how long it had been (the drop itself is the signal).
+    console.log('[CU] Browser reports online -> recovering');
+    forceRecovery('browser online');
+  });
+  window.addEventListener('pageshow', function(e) {
+    // bfcache restore (or any re-show) -- treat like regaining visibility.
+    if (e.persisted) { _lastWatchdogWallClock = Date.now(); forceRecovery('pageshow (bfcache restore)'); }
   });
 
   // ---- Update-available check ----
