@@ -431,6 +431,30 @@
       margin-top: 5px;
     }
 
+    /* BACKEND_GONE: the desktop app process itself is unreachable (Kestrel down), not just a
+       dropped SignalR channel -- forceRecovery()'s own HTTP fetches have failed repeatedly.
+       Deliberately alarming (red, full-width) since this is the state that let a phone user miss
+       a quota limit while looking at hours-old numbers with no indication they were stale. */
+    .backend-gone-banner {
+      flex-shrink: 0;
+      background: #3a1414;
+      border-bottom: 2px solid var(--red);
+      color: #ffd6d6;
+      padding: 9px 16px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    /* Marks every usage card as stale/unreliable once the backend is confirmed gone -- stronger
+       than .stale-mode (which only ever means "polling backed off", not "no backend at all"), and
+       applies to BOTH lanes, unlike .stale-mode which is Claude-only. */
+    #mainView.backend-gone #claudeCol,
+    #mainView.backend-gone #codexCol {
+      filter: grayscale(70%) opacity(0.5);
+      transition: filter 0.4s, opacity 0.4s;
+    }
+
     /* Rounding-ambiguity warning: shown on weekly card only, late in period near the cap */
     .rounding-warning {
       font-size: 0.65rem;
@@ -1068,6 +1092,10 @@
   Update available: <a id="updateLink" href="#" target="_blank" rel="noopener noreferrer"></a> -- click to download
 </div>
 
+<div id="backendGoneBanner" class="backend-gone-banner hidden">
+  Desktop app not running -- data shown was last updated <span id="backendGoneElapsed">a while</span> ago
+</div>
+
 <div id="backoffBanner" class="backoff-banner hidden">
   <div class="backoff-banner-head">
     <span class="backoff-banner-title" id="backoffTitle"></span>
@@ -1437,6 +1465,13 @@
   let _lastPushAt             = 0;           // last SignalR push specifically (0 = none yet this session)
   let _uiConnLost             = false;       // true once the watchdog has declared the live link lost
   let _lastWatchdogWallClock  = Date.now();  // previous watchdog tick time, for sleep/suspend gap detection
+  // BACKEND_GONE: distinct from _uiConnLost above. _uiConnLost means "the push channel died but
+  // plain HTTP to this same backend still works" -- forceRecovery() proved that. BACKEND_GONE means
+  // forceRecovery()'s OWN HTTP fetches have ALSO failed, repeatedly -- i.e. Kestrel itself is
+  // unreachable (the desktop app exited, the PC slept/rebooted, the phone left the LAN). See
+  // _setBackendGone() far below.
+  let _recoveryFailStreak     = 0;           // consecutive forceRecovery() calls with zero successful contact
+  let _backendGone            = false;       // true once BACKEND_GONE_THRESHOLD consecutive recoveries all failed
   // Part 3: when false, windows the API reports as "not tracked this period" (null) are hidden
   // behind an inline reveal toggle. Loaded from settings (showUntrackedWindows) at startup and
   // whenever Settings loads; persisted via POST /api/untracked-windows.
@@ -2375,6 +2410,7 @@
     });
     if (needsRender && lastData) render(lastData);
     _refreshUpdatedEl();
+    _refreshBackendGoneBanner();
   }, 1000);
 
   // ---- Card detail view ----
@@ -2542,6 +2578,7 @@
   const WATCHDOG_TICK_MS = 20 * 1000;    // how often we check for silence
   const BASE_PUSH_MS     = 180 * 1000;   // healthy backend push cadence (UsagePoller.BaseIntervalSec)
   const SLEEP_GAP_MS     = 60 * 1000;    // a tick this much late => the machine was suspended
+  const BACKEND_GONE_THRESHOLD = 3;      // consecutive fully-failed forceRecovery() calls before declaring the backend gone
 
   // Silence we tolerate before treating the live link as lost. ~2.5x the expected push cadence so a
   // healthy channel (a push every ~180s) never trips it, but a dead one is caught in minutes not
@@ -2589,12 +2626,40 @@
     }
   }
 
+  // BACKEND_GONE: the desktop app itself looks unreachable, not just the push channel. Shows a
+  // full-width banner and dims BOTH usage lanes so a phone glancing at last-known numbers can never
+  // mistake them for live. Forces _uiConnLost true too (defensive -- in practice it's already true
+  // by the time this trips, since forceRecovery is normally only reached via the watchdog after it
+  // declared the link lost).
+  function _setBackendGone(gone) {
+    if (gone === _backendGone) return;
+    _backendGone = gone;
+    if (gone && !_uiConnLost) _setUiConnLost(true);
+    const banner = document.getElementById('backendGoneBanner');
+    const mainView = document.getElementById('mainView');
+    if (banner) banner.classList.toggle('hidden', !gone);
+    if (mainView) mainView.classList.toggle('backend-gone', gone);
+    if (gone) _refreshBackendGoneBanner();
+  }
+
+  // "Last updated" reference for the banner is the last time we actually rendered real data
+  // (_lastFetchedAt), not just the last proven HTTP contact -- the user cares about the age of the
+  // numbers on screen, not the age of the last ping.
+  function _refreshBackendGoneBanner() {
+    if (!_backendGone) return;
+    const el = document.getElementById('backendGoneElapsed');
+    if (!el) return;
+    const ref = _lastFetchedAt || _lastServerContactAt;
+    el.textContent = _fmtElapsedSince(Date.now() - ref);
+  }
+
   // Force an immediate, SignalR-INDEPENDENT recovery. Pulls current state over plain HTTP so the UI
   // self-heals even when the push channel is a zombie, detects a backend restart (hard reload), and
   // revives SignalR (a clean stop+reconnect when hardReset is asked for -- the zombie case). Safe to
   // call often; every fetch hits the local Kestrel. Returns nothing; updates the UI as a side effect.
   async function forceRecovery(reason, hardReset) {
     console.log('[CU] forceRecovery (' + reason + ')' + (hardReset ? ' [hard-reset]' : ''));
+    let anyContact = false;   // did ANYTHING in this attempt actually reach the backend?
 
     // 1. Backend restarted? A changed instance id means this page is talking to a dead process --
     //    reload so we bind to the new one (same check the reconnect poller does).
@@ -2607,25 +2672,32 @@
       }
       if (!_instanceId) _instanceId = newId;
       _markServerContact(false);   // reaching /api/instance proves the local link is alive
+      anyContact = true;
     }
 
     // 2. Re-pull the authoritative current state over HTTP (bypasses the possibly-dead push channel).
     //    Backoff first so the banner reflects the TRUE state (this is what corrects a stale
-    //    "signed out" left frozen on screen), then usage.
+    //    "signed out" left frozen on screen), then usage. Each fetch swallows its own error into a
+    //    null result (so Promise.all always resolves) -- only mark/count contact when at least one
+    //    of them actually came back, otherwise a fully-dead backend would still look "contacted".
     try {
       const [u, b] = await Promise.all([
         fetch('/api/usage').then(r => r.ok ? r.json() : null).catch(function() { return null; }),
         fetch('/api/backoff').then(r => r.ok ? r.json() : null).catch(function() { return null; }),
       ]);
-      _backoffState = b || null;
-      _markServerContact(false);   // clears _uiConnLost so updateBackoffBanner shows the real state
-      updateBackoffBanner();
-      if (u) render(u);
+      if (u || b) {
+        _backoffState = b || null;
+        _markServerContact(false);   // clears _uiConnLost so updateBackoffBanner shows the real state
+        anyContact = true;
+        updateBackoffBanner();
+        if (u) render(u);
+      }
     } catch (e) {
       console.warn('[CU] forceRecovery usage/backoff fetch failed', e);
     }
 
-    // Codex lane too (independent feed).
+    // Codex lane too (independent feed). Fire-and-forget -- doesn't factor into anyContact below
+    // since these resolve after we've already decided this attempt's outcome.
     fetch('/api/codex/usage').then(r => r.ok ? r.json() : null)
       .then(function(d) { if (d) { _codexData = d; renderCodex(); _markServerContact(false); } }).catch(function() {});
     fetch('/api/codex/status').then(r => r.ok ? r.json() : undefined)
@@ -2641,6 +2713,18 @@
         console.log('[CU] forceRecovery: stopping a zombie SignalR connection to force a clean reconnect');
         conn.stop().catch(function() {});
       }
+    }
+
+    // BACKEND_GONE tracking -- see _setBackendGone(). Only trips after BACKEND_GONE_THRESHOLD
+    // consecutive attempts where NOTHING above reached the backend (not even /api/instance), which
+    // means Kestrel itself is unreachable, not just a dropped push channel.
+    if (anyContact) {
+      _recoveryFailStreak = 0;
+      if (_backendGone) _setBackendGone(false);
+    } else {
+      _recoveryFailStreak++;
+      console.log('[CU] forceRecovery: no successful contact this attempt (streak=' + _recoveryFailStreak + ')');
+      if (_recoveryFailStreak >= BACKEND_GONE_THRESHOLD) _setBackendGone(true);
     }
   }
 
@@ -2764,7 +2848,7 @@
           .then(d => { if (d) { _markServerContact(false); render(d); } }).catch(function() {});
         // Refresh the backoff banner too so a no-hub client still gets honest state transitions.
         fetch('/api/backoff').then(r => r.ok ? r.json() : null)
-          .then(d => { _markServerContact(false); _backoffState = d || null; updateBackoffBanner(); }).catch(function() {});
+          .then(d => { if (d) _markServerContact(false); _backoffState = d || null; updateBackoffBanner(); }).catch(function() {});
         // Poll the Codex lane on the same fallback cadence (independent of the Claude fetch).
         fetch('/api/codex/usage').then(r => r.ok ? r.json() : null)
           .then(d => { if (d) { _codexData = d; renderCodex(); } }).catch(function() {});
