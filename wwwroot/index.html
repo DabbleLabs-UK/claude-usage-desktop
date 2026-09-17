@@ -1415,7 +1415,7 @@
 <div id="agentSpendDetailView" class="detail-view hidden">
   <div class="detail-header">
     <button class="back-btn" onclick="history.back()">&#8592; Back</button>
-    <span class="detail-title">API Spend</span>
+    <span class="detail-title">Launcher Spend</span>
   </div>
   <div id="agentSpendDetailBody"></div>
 </div>
@@ -2202,7 +2202,7 @@
 
     return (
       '<div class="card agent-spend-card' + (data.isStale ? ' agent-spend-stale' : '') + '" onclick="openAgentSpendDetail()" style="cursor:pointer">'
-      + '<div class="card-head"><span class="label">API Spend</span></div>'
+      + '<div class="card-head"><span class="label">Launcher Spend</span></div>'
       + '<div class="spend-row">'
       +   '<div class="spend-row-head"><span class="spend-row-label">24H PACE</span>'
       +   '<span class="spend-row-value">' + sym + num(r24.totalCost).toFixed(2) + '/day &middot; ' + sym + num(rr.monthlyAt24hPace).toFixed(2) + '/mo</span></div>'
@@ -2303,6 +2303,7 @@
 
     let html = '<div class="explain-block">'
       + '<div class="explain-title">Summary</div>'
+      + '<div class="explain-text" style="margin-bottom:8px">Only includes runs recorded by the Agents &amp; Inference launcher. These figures are not your complete OpenRouter account.</div>'
       + '<div class="spend-stat-grid">'
       +   _spendStatRow('24h spend', sym + r24.totalCost.toFixed(3))
       +   _spendStatRow('7d total', sym + r7.totalCost.toFixed(2))

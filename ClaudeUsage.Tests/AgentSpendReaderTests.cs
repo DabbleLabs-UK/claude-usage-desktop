@@ -67,6 +67,8 @@ public class AgentSpendReaderTests : IDisposable
     public void ValidFile_ReturnsOkWithData()
     {
         File.WriteAllText(_tempPath, ValidBody);
+        var expectedUpdatedAt = new DateTimeOffset(2026, 9, 17, 12, 34, 56, TimeSpan.Zero);
+        File.SetLastWriteTimeUtc(_tempPath, expectedUpdatedAt.UtcDateTime);
 
         var result = AgentSpendReader.Read(_tempPath);
 
@@ -74,6 +76,7 @@ public class AgentSpendReaderTests : IDisposable
         Assert.NotNull(result.Data);
         Assert.Equal("ok", result.Data!.Source.Status);
         Assert.True(result.FileExisted);
+        Assert.Equal(expectedUpdatedAt, result.FileUpdatedAt);
     }
 
     [Fact]

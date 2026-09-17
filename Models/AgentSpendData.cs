@@ -52,7 +52,7 @@ public record AgentSpendData(
     IReadOnlyList<AgentSpendProviderBreakdown> BreakdownByProvider,
     IReadOnlyList<AgentSpendDailyPoint> DailyHistory,
     // Set by AgentSpendPoller -- true whenever the CURRENT snapshot is not a fresh, status=="ok"
-    // read (a missing/malformed file, a non-"ok" source status, or an "ok" read whose generated_at
-    // is older than AgentSpendFreshnessPolicy.FreshWindow). Never implies zeroed figures -- it
-    // always carries the last good snapshot, just flagged.
+    // read (a missing/malformed file, a non-"ok" source status, or a local summary file that has
+    // not been refreshed within AgentSpendFreshnessPolicy.FreshWindow). Never implies zeroed
+    // figures -- it always carries the last good snapshot, just flagged.
     bool IsStale = false);

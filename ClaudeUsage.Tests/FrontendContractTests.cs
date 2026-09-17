@@ -17,4 +17,14 @@ public class FrontendContractTests
         Assert.DoesNotContain(".agent-spend-card.stale", html);
         Assert.DoesNotContain("data.isStale ? ' stale' : ''", html);
     }
+
+    [Fact]
+    public void AgentSpendCard_IdentifiesLauncherOnlyScope()
+    {
+        var html = File.ReadAllText(IndexHtmlPath);
+
+        Assert.Contains("Launcher Spend", html);
+        Assert.Contains("not your complete OpenRouter account", html);
+        Assert.DoesNotContain("<span class=\"label\">API Spend</span>", html);
+    }
 }

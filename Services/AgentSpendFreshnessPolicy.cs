@@ -6,10 +6,9 @@ namespace ClaudeUsage.Services;
 //
 // The contract says: on a missing file, malformed JSON, or source.status != "ok", retain the last
 // good snapshot and mark it stale rather than adopting the new (untrustworthy) read. ShouldAdopt
-// is that gate. IsFreshEnough is a second, independent check applied even to an adopted read: a
-// producer that keeps writing status "ok" but has stopped actually updating (a hung background
-// job) would otherwise look perpetually live. There is no producer cadence stated in the contract,
-// so FreshWindow is a conservative guess, not a value read from the file.
+// is that gate. IsFreshEnough is a second, independent check applied to the local file's update
+// time. A successful Windows sync rewrites the file every five minutes even when no launcher runs
+// occurred, so this detects a broken sync without incorrectly treating an idle launcher as stale.
 public static class AgentSpendFreshnessPolicy
 {
     public static readonly TimeSpan FreshWindow = TimeSpan.FromMinutes(30);
@@ -17,6 +16,6 @@ public static class AgentSpendFreshnessPolicy
     public static bool ShouldAdopt(string sourceStatus) =>
         string.Equals(sourceStatus, "ok", StringComparison.Ordinal);
 
-    public static bool IsFreshEnough(DateTimeOffset generatedAt, DateTimeOffset now) =>
-        now - generatedAt <= FreshWindow;
+    public static bool IsFreshEnough(DateTimeOffset fileUpdatedAt, DateTimeOffset now) =>
+        now - fileUpdatedAt <= FreshWindow;
 }

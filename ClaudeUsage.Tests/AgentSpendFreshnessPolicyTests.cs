@@ -28,9 +28,9 @@ public class AgentSpendFreshnessPolicyTests
     }
 
     [Fact]
-    public void IsFreshEnough_FutureGeneratedAt_StillFresh()
+    public void IsFreshEnough_FutureFileTimestamp_StillFresh()
     {
-        // Clock skew between the producer and this machine shouldn't manufacture a false "stale".
+        // Filesystem timestamp skew should not manufacture a false "stale".
         var now = new DateTimeOffset(2026, 9, 17, 12, 0, 0, TimeSpan.Zero);
         Assert.True(AgentSpendFreshnessPolicy.IsFreshEnough(now.AddMinutes(5), now));
     }

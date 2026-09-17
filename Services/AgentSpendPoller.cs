@@ -55,7 +55,11 @@ public sealed class AgentSpendPoller : BackgroundService
             if (result.Status == AgentSpendReader.ReadStatus.Ok
                 && AgentSpendFreshnessPolicy.ShouldAdopt(result.Data!.Source.Status))
             {
-                var fresh = AgentSpendFreshnessPolicy.IsFreshEnough(result.Data.GeneratedAt, DateTimeOffset.UtcNow);
+                // generated_at advances only when a launcher run changes the remote summary. The
+                // local file timestamp advances on every successful five-minute sync, including
+                // quiet periods, so it is the correct reachability/freshness signal here.
+                var freshnessAnchor = result.FileUpdatedAt ?? result.Data.GeneratedAt;
+                var fresh = AgentSpendFreshnessPolicy.IsFreshEnough(freshnessAnchor, DateTimeOffset.UtcNow);
                 _state.Update(result.Data with { IsStale = !fresh });
                 adopted = true;
                 stale = !fresh;
