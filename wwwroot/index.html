@@ -2182,12 +2182,17 @@
     return '<div class="track"><div class="fill" style="width:' + pct.toFixed(1) + '%;background:' + color + '"></div></div>';
   }
 
+  // Defensive against any real-world payload shape this hasn't been tested against (a nested
+  // object present-but-partially-populated, a number arriving as a string, etc.) -- '|| {}' /
+  // Number(...) || 0 coercions mean this can NEVER throw, so a render fault can never be the
+  // reason the card silently fails to appear (see renderAgentSpend below, which relies on that).
   function renderAgentSpendCard(data) {
     const sym = currencySymbol(data.currency);
-    const r24 = data.rolling24h, r7 = data.rolling7d, mtd = data.monthToDate, rr = data.runRates;
+    const r24 = data.rolling24h || {}, r7 = data.rolling7d || {}, mtd = data.monthToDate || {}, rr = data.runRates || {};
+    const num = v => Number(v) || 0;
 
-    const footerParts = [sym + mtd.totalCost.toFixed(2), mtd.pricedRuns + ' priced'];
-    if (mtd.unpricedRuns > 0) footerParts.push(mtd.unpricedRuns + ' unpriced');
+    const footerParts = [sym + num(mtd.totalCost).toFixed(2), num(mtd.pricedRuns) + ' priced'];
+    if (num(mtd.unpricedRuns) > 0) footerParts.push(num(mtd.unpricedRuns) + ' unpriced');
     const staleNote = data.isStale
       ? ' &middot; <span style="color:var(--yellow)">stale, as of '
         + new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '</span>'
@@ -2198,19 +2203,28 @@
       + '<div class="card-head"><span class="label">API Spend</span></div>'
       + '<div class="spend-row">'
       +   '<div class="spend-row-head"><span class="spend-row-label">24H PACE</span>'
-      +   '<span class="spend-row-value">' + sym + r24.totalCost.toFixed(2) + '/day &middot; ' + sym + rr.monthlyAt24hPace.toFixed(2) + '/mo</span></div>'
-      +   _spendBar(rr.monthlyAt24hPace, 'var(--accent)')
+      +   '<span class="spend-row-value">' + sym + num(r24.totalCost).toFixed(2) + '/day &middot; ' + sym + num(rr.monthlyAt24hPace).toFixed(2) + '/mo</span></div>'
+      +   _spendBar(num(rr.monthlyAt24hPace), 'var(--accent)')
       + '</div>'
       + '<div class="spend-row">'
       +   '<div class="spend-row-head"><span class="spend-row-label">7D PACE</span>'
-      +   '<span class="spend-row-value">' + sym + r7.dailyAverage.toFixed(2) + '/day &middot; ' + sym + rr.monthlyAt7dPace.toFixed(2) + '/mo</span></div>'
-      +   _spendBar(rr.monthlyAt7dPace, 'var(--yellow-green)')
+      +   '<span class="spend-row-value">' + sym + num(r7.dailyAverage).toFixed(2) + '/day &middot; ' + sym + num(rr.monthlyAt7dPace).toFixed(2) + '/mo</span></div>'
+      +   _spendBar(num(rr.monthlyAt7dPace), 'var(--yellow-green)')
       + '</div>'
       + '<div class="spend-scale-label">' + sym + SPEND_MONTHLY_CEILING + '/mo</div>'
       + '<div class="reset spend-footer">' + footerParts.join(' &middot; ') + staleNote + '</div>'
       + '</div>');
   }
 
+  // Show/hide rule: the card appears whenever ANY spend data has EVER been adopted (_agentSpendData
+  // set at least once by a hub push or the initial REST fetch), REGARDLESS of data.isStale -- stale
+  // data still shows the card (dimmed via the .stale CSS class + a "stale, as of HH:MM" footer
+  // note), it just never gets zeroed or hidden. The card is hidden ONLY while _agentSpendData is
+  // still null, i.e. first-run/no-file, before a single good read has ever happened -- mirroring the
+  // Codex lane's "no login yet -> hide the section" treatment. Nothing here (or anywhere else this
+  // module touches _agentSpendData -- see the state declaration above) ever resets _agentSpendData
+  // back to null once real data has arrived, so once the card has appeared it never disappears again
+  // on its own; a failed/stale poll can only dim it.
   function renderAgentSpend() {
     const col = document.getElementById('agentSpendCol');
     if (!_agentSpendData) {
@@ -2219,7 +2233,15 @@
       return;
     }
     col.classList.remove('hidden');
-    col.innerHTML = renderAgentSpendCard(_agentSpendData);
+    try {
+      col.innerHTML = renderAgentSpendCard(_agentSpendData);
+    } catch (e) {
+      // renderAgentSpendCard is written to never throw (see its own defensive coercions above), but
+      // if some future edit reintroduces a fault, fail LOUD (console) rather than silently leaving
+      // the column unhidden-but-empty, which reads identically to "the card isn't appearing".
+      console.error('[CU] renderAgentSpendCard threw -- API Spend card left unrendered:', e);
+      return;
+    }
 
     // If the API-spend detail view is currently open, refresh it from this poll too, mirroring the
     // Claude/Codex "keep an open detail view live" behaviour.
