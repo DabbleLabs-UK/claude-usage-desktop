@@ -15,31 +15,48 @@ public static class AgentSpendReader
 
     public enum ReadStatus { Ok, Missing, Malformed }
 
-    public sealed record ReadResult(ReadStatus Status, AgentSpendData? Data);
+    // FileExisted + Detail are diagnostic-only (surfaced by AgentSpendPoller into poll.log) -- they
+    // don't change any adoption/staleness decision, which is still driven purely by Status/Data.
+    public sealed record ReadResult(ReadStatus Status, AgentSpendData? Data, bool FileExisted, string? Detail = null);
 
     // path override exists purely so tests can point this at a temp file instead of the real
     // %LOCALAPPDATA% location; production callers always use the default (FilePath).
     public static ReadResult Read(string? path = null)
     {
         path ??= FilePath;
+
+        bool exists;
+        try
+        {
+            exists = File.Exists(path);
+        }
+        catch (Exception ex)
+        {
+            // Even the existence check can throw (e.g. an inaccessible/unmapped path) -- capture it
+            // rather than letting it propagate, same as every other fault in this reader.
+            return new ReadResult(ReadStatus.Missing, null, false, $"File.Exists threw {ex.GetType().Name}: {ex.Message}");
+        }
+
+        if (!exists)
+            return new ReadResult(ReadStatus.Missing, null, false, "File.Exists() returned false");
+
         string json;
         try
         {
-            if (!File.Exists(path)) return new ReadResult(ReadStatus.Missing, null);
             json = File.ReadAllText(path);
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            return new ReadResult(ReadStatus.Missing, null);
+            return new ReadResult(ReadStatus.Missing, null, true, $"IOException reading file: {ex.Message}");
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            return new ReadResult(ReadStatus.Missing, null);
+            return new ReadResult(ReadStatus.Missing, null, true, $"UnauthorizedAccessException reading file: {ex.Message}");
         }
 
         var data = AgentSpendParser.Parse(json);
         return data is null
-            ? new ReadResult(ReadStatus.Malformed, null)
-            : new ReadResult(ReadStatus.Ok, data);
+            ? new ReadResult(ReadStatus.Malformed, null, true, $"AgentSpendParser.Parse returned null for a {json.Length}-char body")
+            : new ReadResult(ReadStatus.Ok, data, true);
     }
 }

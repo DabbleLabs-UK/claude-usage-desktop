@@ -36,6 +36,8 @@ public class AgentSpendReaderTests : IDisposable
 
         Assert.Equal(AgentSpendReader.ReadStatus.Missing, result.Status);
         Assert.Null(result.Data);
+        Assert.False(result.FileExisted);
+        Assert.Contains("File.Exists()", result.Detail);
     }
 
     [Fact]
@@ -47,6 +49,8 @@ public class AgentSpendReaderTests : IDisposable
 
         Assert.Equal(AgentSpendReader.ReadStatus.Malformed, result.Status);
         Assert.Null(result.Data);
+        Assert.True(result.FileExisted);   // the file WAS found -- only its contents were bad
+        Assert.NotNull(result.Detail);
     }
 
     [Fact]
@@ -69,6 +73,7 @@ public class AgentSpendReaderTests : IDisposable
         Assert.Equal(AgentSpendReader.ReadStatus.Ok, result.Status);
         Assert.NotNull(result.Data);
         Assert.Equal("ok", result.Data!.Source.Status);
+        Assert.True(result.FileExisted);
     }
 
     [Fact]

@@ -200,6 +200,30 @@ public sealed class PollLog
         catch { /* best-effort */ }
     }
 
+    // --- Agent-spend lane --------------------------------------------------------------------
+    // Diagnostic trail for the "No agent spend data yet" report: with builder.Logging.ClearProviders()
+    // in effect (see App.xaml.cs -- ILogger has NO providers at all outside DEBUG builds), the
+    // AgentSpendPoller's ILogger calls are silently discarded in a published/dist build. This is the
+    // only place that report is actually visible on a real install, so log EVERY poll (not just
+    // failures) with exactly what path was resolved, whether File.Exists() saw it, and the parsed
+    // outcome -- enough to tell "wrong path" from "file there but rejected" from "poller never ran".
+    public void LogAgentSpendStartup(string path)
+    {
+        try { Write($"AGENTSPEND poller started; watching path=\"{path}\""); }
+        catch { /* best-effort */ }
+    }
+
+    public void LogAgentSpendPoll(string path, bool fileExisted, string status, string? detail, bool adopted, bool stale)
+    {
+        try
+        {
+            var line = $"AGENTSPEND POLL path=\"{path}\" exists={fileExisted} status={status} adopted={adopted} stale={stale}";
+            if (!string.IsNullOrEmpty(detail)) line += $" detail=\"{detail}\"";
+            Write(line);
+        }
+        catch { /* best-effort */ }
+    }
+
     private void Write(string message)
     {
         var stamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);

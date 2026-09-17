@@ -17,18 +17,25 @@ public sealed class AgentSpendPoller : BackgroundService
     private const int IntervalSec = 180;
 
     private readonly AgentSpendState _state;
+    private readonly PollLog _pollLog;
     private readonly IHubContext<UsageHub> _hub;
     private readonly ILogger<AgentSpendPoller> _logger;
 
-    public AgentSpendPoller(AgentSpendState state, IHubContext<UsageHub> hub, ILogger<AgentSpendPoller> logger)
+    public AgentSpendPoller(AgentSpendState state, PollLog pollLog, IHubContext<UsageHub> hub, ILogger<AgentSpendPoller> logger)
     {
         _state = state;
+        _pollLog = pollLog;
         _hub = hub;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Proves (in poll.log, which is readable in a published/dist build -- ILogger has no
+        // providers outside DEBUG) that this hosted service actually started and exactly which
+        // path it resolved to watch, before any poll has happened.
+        _pollLog.LogAgentSpendStartup(AgentSpendReader.FilePath);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             await PollAsync(stoppingToken);
@@ -43,11 +50,15 @@ public sealed class AgentSpendPoller : BackgroundService
         {
             var result = AgentSpendReader.Read();
 
+            var adopted = false;
+            var stale = true;
             if (result.Status == AgentSpendReader.ReadStatus.Ok
                 && AgentSpendFreshnessPolicy.ShouldAdopt(result.Data!.Source.Status))
             {
                 var fresh = AgentSpendFreshnessPolicy.IsFreshEnough(result.Data.GeneratedAt, DateTimeOffset.UtcNow);
                 _state.Update(result.Data with { IsStale = !fresh });
+                adopted = true;
+                stale = !fresh;
             }
             else
             {
@@ -57,6 +68,9 @@ public sealed class AgentSpendPoller : BackgroundService
                 // first good read.
                 _state.MarkStale();
             }
+
+            _pollLog.LogAgentSpendPoll(
+                AgentSpendReader.FilePath, result.FileExisted, result.Status.ToString(), result.Detail, adopted, stale);
 
             if (_state.Current is { } current)
                 await _hub.Clients.All.SendAsync("agentSpendUpdated", current, ct);
@@ -68,7 +82,11 @@ public sealed class AgentSpendPoller : BackgroundService
         catch (Exception ex)
         {
             // Backstop: an agent-spend fault must NEVER escape into the host or disturb Claude/Codex.
+            // Logged to BOTH ILogger (dev/DEBUG visibility) and poll.log (the only one visible in a
+            // published/dist build) so this can never go silent the way the original report did.
             _logger.LogWarning(ex, "Agent-spend poll cycle failed unexpectedly; other usage lanes unaffected.");
+            try { _pollLog.LogAgentSpendPoll(AgentSpendReader.FilePath, false, "PollerException", $"{ex.GetType().Name}: {ex.Message}", false, true); }
+            catch { /* logging is best-effort */ }
         }
     }
 }
