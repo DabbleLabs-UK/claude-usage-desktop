@@ -523,7 +523,9 @@
     }
 
     /* ---- API Spend card (home) ---- */
-    .agent-spend-card.stale {
+    /* Dedicated modifier: do not reuse the global .stale toolbar-badge class, which is
+       display:none until paired with .show and would collapse this entire card. */
+    .agent-spend-card.agent-spend-stale {
       filter: grayscale(45%) opacity(0.62);
       transition: filter 0.4s, opacity 0.4s;
     }
@@ -2199,7 +2201,7 @@
       : '';
 
     return (
-      '<div class="card agent-spend-card' + (data.isStale ? ' stale' : '') + '" onclick="openAgentSpendDetail()" style="cursor:pointer">'
+      '<div class="card agent-spend-card' + (data.isStale ? ' agent-spend-stale' : '') + '" onclick="openAgentSpendDetail()" style="cursor:pointer">'
       + '<div class="card-head"><span class="label">API Spend</span></div>'
       + '<div class="spend-row">'
       +   '<div class="spend-row-head"><span class="spend-row-label">24H PACE</span>'
