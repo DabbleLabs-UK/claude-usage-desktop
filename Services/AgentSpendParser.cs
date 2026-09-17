@@ -14,32 +14,62 @@ namespace ClaudeUsage.Services;
 // division -- never here).
 public static class AgentSpendParser
 {
-    public static AgentSpendData? Parse(string json)
+    // Convenience overload for call sites that don't need the diagnostic reason.
+    public static AgentSpendData? Parse(string json) => Parse(json, out _);
+
+    // failureReason is diagnostic-only (surfaced into poll.log by AgentSpendReader/AgentSpendPoller)
+    // -- it never changes what gets parsed, only explains a null result: which required field was
+    // missing/wrong-shaped, or the exact exception if something threw.
+    public static AgentSpendData? Parse(string json, out string? failureReason)
     {
+        failureReason = null;
         try
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                failureReason = $"root element is {root.ValueKind}, not an object";
+                return null;
+            }
 
-            if (!TryGetStr(root, "schema_version", out var schemaVersion)) return null;
-            if (!TryGetDate(root, "generated_at", out var generatedAt)) return null;
+            // schema_version is informational only (not used anywhere downstream) and its type
+            // isn't nailed down by the contract -- the real file has been seen sending it as a
+            // JSON NUMBER (e.g. 1), not a string ("v1"). Accept either shape and never let this
+            // field alone fail the whole parse.
+            var schemaVersion = TryGetSchemaVersion(root, out var sv) ? sv! : "";
+
+            if (!TryGetDate(root, "generated_at", out var generatedAt))
+            {
+                failureReason = "generated_at missing, not a string, or not a parseable date";
+                return null;
+            }
 
             var currency = TryGetStr(root, "currency", out var cur) ? cur! : "USD";
             var dataThrough = TryGetStr(root, "data_through", out var dt) ? dt : null;
             var timezone = TryGetStr(root, "timezone", out var tz) ? tz : null;
 
             var source = ParseSource(root);
-            if (source is null) return null;
+            if (source is null)
+            {
+                failureReason = "source missing/not an object, or source.status missing/not a string";
+                return null;
+            }
 
             var rolling24h = ParseRolling24h(root);
+            if (rolling24h is null) { failureReason = "rolling_24h missing or not an object"; return null; }
+
             var rolling7d = ParseRolling7d(root);
+            if (rolling7d is null) { failureReason = "rolling_7d missing or not an object"; return null; }
+
             var mtd = ParseMonthToDate(root);
+            if (mtd is null) { failureReason = "month_to_date missing or not an object"; return null; }
+
             var runRates = ParseRunRates(root);
-            if (rolling24h is null || rolling7d is null || mtd is null || runRates is null) return null;
+            if (runRates is null) { failureReason = "run_rates missing or not an object"; return null; }
 
             return new AgentSpendData(
-                schemaVersion!,
+                schemaVersion,
                 generatedAt,
                 dataThrough,
                 currency,
@@ -53,8 +83,16 @@ public static class AgentSpendParser
                 ParseProviderBreakdown(root),
                 ParseDailyHistory(root));
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
+            failureReason = $"JsonException: {ex.Message}";
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // Backstop for anything not caught above -- e.g. a null-reference while walking a
+            // sub-array. Parse() must NEVER throw out to AgentSpendReader/AgentSpendPoller.
+            failureReason = $"{ex.GetType().Name}: {ex.Message}";
             return null;
         }
     }
@@ -154,6 +192,29 @@ public static class AgentSpendParser
         {
             value = v.GetString();
             return value is not null;
+        }
+        return false;
+    }
+
+    // schema_version specifically: accept a String ("v1") or a Number (1, 1.0) and normalise both
+    // to a display string. Every other numeric-or-string ambiguity in the contract is a genuine
+    // required field (dates, costs) where the real shape is well established; this one field is
+    // the exception because it's purely informational and has been observed as a bare number.
+    private static bool TryGetSchemaVersion(JsonElement el, out string? value)
+    {
+        value = null;
+        if (!el.TryGetProperty("schema_version", out var v)) return false;
+        if (v.ValueKind == JsonValueKind.String)
+        {
+            value = v.GetString();
+            return value is not null;
+        }
+        if (v.ValueKind == JsonValueKind.Number)
+        {
+            value = v.TryGetInt64(out var i)
+                ? i.ToString(CultureInfo.InvariantCulture)
+                : v.GetDouble().ToString(CultureInfo.InvariantCulture);
+            return true;
         }
         return false;
     }

@@ -54,9 +54,10 @@ public static class AgentSpendReader
             return new ReadResult(ReadStatus.Missing, null, true, $"UnauthorizedAccessException reading file: {ex.Message}");
         }
 
-        var data = AgentSpendParser.Parse(json);
+        var data = AgentSpendParser.Parse(json, out var parseFailureReason);
         return data is null
-            ? new ReadResult(ReadStatus.Malformed, null, true, $"AgentSpendParser.Parse returned null for a {json.Length}-char body")
+            ? new ReadResult(ReadStatus.Malformed, null, true,
+                $"AgentSpendParser.Parse returned null for a {json.Length}-char body: {parseFailureReason ?? "(no reason captured)"}")
             : new ReadResult(ReadStatus.Ok, data, true);
     }
 }

@@ -251,4 +251,120 @@ public class AgentSpendParserTests
         var m = Assert.Single(d!.BreakdownByModel);
         Assert.Equal("kept", m.Model);
     }
+
+    // Regression test for the real-world bug: the production file sends schema_version as a bare
+    // JSON NUMBER (e.g. 1), not a string ("v1") like every hand-written fixture above assumed.
+    // TryGetStr's strict ValueKind.String check made this the very first required-field gate to
+    // fail, so Parse() returned null for an otherwise perfectly valid, fully-populated file.
+    [Fact]
+    public void SchemaVersionAsNumber_ParsesSuccessfully()
+    {
+        const string body = """
+        {
+          "schema_version": 1,
+          "generated_at": "2026-09-17T00:00:00Z",
+          "currency": "USD",
+          "source": { "status": "ok" },
+          "rolling_24h": { "total_cost": 1, "priced_runs": 1, "unpriced_runs": 0 },
+          "rolling_7d": { "total_cost": 1, "daily_average": 1, "priced_runs": 1, "unpriced_runs": 0 },
+          "month_to_date": { "total_cost": 1, "priced_runs": 1, "unpriced_runs": 0 },
+          "run_rates": { "monthly_at_24h_pace": 1, "monthly_at_7d_pace": 1 }
+        }
+        """;
+
+        var d = AgentSpendParser.Parse(body, out var reason);
+
+        Assert.NotNull(d);
+        Assert.Null(reason);
+        Assert.Equal("1", d!.SchemaVersion);
+    }
+
+    [Fact]
+    public void SchemaVersionAsDecimalNumber_NormalisesToString()
+    {
+        const string body = """
+        {
+          "schema_version": 1.2,
+          "generated_at": "2026-09-17T00:00:00Z",
+          "source": { "status": "ok" },
+          "rolling_24h": { "total_cost": 1, "priced_runs": 1, "unpriced_runs": 0 },
+          "rolling_7d": { "total_cost": 1, "daily_average": 1, "priced_runs": 1, "unpriced_runs": 0 },
+          "month_to_date": { "total_cost": 1, "priced_runs": 1, "unpriced_runs": 0 },
+          "run_rates": { "monthly_at_24h_pace": 1, "monthly_at_7d_pace": 1 }
+        }
+        """;
+
+        var d = AgentSpendParser.Parse(body);
+
+        Assert.NotNull(d);
+        Assert.Equal("1.2", d!.SchemaVersion);
+    }
+
+    [Fact]
+    public void SchemaVersionMissingEntirely_StillParses_DefaultsToEmptyString()
+    {
+        const string body = """
+        {
+          "generated_at": "2026-09-17T00:00:00Z",
+          "source": { "status": "ok" },
+          "rolling_24h": { "total_cost": 1, "priced_runs": 1, "unpriced_runs": 0 },
+          "rolling_7d": { "total_cost": 1, "daily_average": 1, "priced_runs": 1, "unpriced_runs": 0 },
+          "month_to_date": { "total_cost": 1, "priced_runs": 1, "unpriced_runs": 0 },
+          "run_rates": { "monthly_at_24h_pace": 1, "monthly_at_7d_pace": 1 }
+        }
+        """;
+
+        var d = AgentSpendParser.Parse(body);
+
+        Assert.NotNull(d);
+        Assert.Equal("", d!.SchemaVersion);
+    }
+
+    // --- Failure-reason tracing (the out string? overload) ------------------------------------
+
+    [Theory]
+    [InlineData("not json at all", "JsonException")]
+    [InlineData("[]", "root element")]
+    public void FailureReason_CapturesStructuralProblems(string body, string expectedSubstring)
+    {
+        AgentSpendParser.Parse(body, out var reason);
+
+        Assert.NotNull(reason);
+        Assert.Contains(expectedSubstring, reason);
+    }
+
+    [Fact]
+    public void FailureReason_MissingGeneratedAt_NamesTheField()
+    {
+        const string body = """{ "schema_version": 1 }""";
+
+        var d = AgentSpendParser.Parse(body, out var reason);
+
+        Assert.Null(d);
+        Assert.Contains("generated_at", reason);
+    }
+
+    [Fact]
+    public void FailureReason_MissingSource_NamesTheField()
+    {
+        const string body = """{ "schema_version": 1, "generated_at": "2026-09-17T00:00:00Z" }""";
+
+        var d = AgentSpendParser.Parse(body, out var reason);
+
+        Assert.Null(d);
+        Assert.Contains("source", reason);
+    }
+
+    [Fact]
+    public void FailureReason_MissingRollingWindows_NamesTheField()
+    {
+        const string body = """
+        { "schema_version": 1, "generated_at": "2026-09-17T00:00:00Z", "source": { "status": "ok" } }
+        """;
+
+        var d = AgentSpendParser.Parse(body, out var reason);
+
+        Assert.Null(d);
+        Assert.Contains("rolling_24h", reason);
+    }
 }
