@@ -2226,8 +2226,14 @@
   // back to null once real data has arrived, so once the card has appeared it never disappears again
   // on its own; a failed/stale poll can only dim it.
   function renderAgentSpend() {
+    console.log('[CU][AgentSpend] renderAgentSpend() called; _agentSpendData =', _agentSpendData);
     const col = document.getElementById('agentSpendCol');
+    if (!col) {
+      console.error('[CU][AgentSpend] #agentSpendCol not found in the DOM -- cannot render');
+      return;
+    }
     if (!_agentSpendData) {
+      console.log('[CU][AgentSpend] no data yet -- hiding #agentSpendCol');
       col.classList.add('hidden');
       col.innerHTML = '';
       return;
@@ -2235,11 +2241,13 @@
     col.classList.remove('hidden');
     try {
       col.innerHTML = renderAgentSpendCard(_agentSpendData);
+      console.log('[CU][AgentSpend] card rendered; #agentSpendCol classList =', col.className,
+        'clientHeight =', col.clientHeight, 'offsetTop (within #main) =', col.offsetTop);
     } catch (e) {
       // renderAgentSpendCard is written to never throw (see its own defensive coercions above), but
       // if some future edit reintroduces a fault, fail LOUD (console) rather than silently leaving
       // the column unhidden-but-empty, which reads identically to "the card isn't appearing".
-      console.error('[CU] renderAgentSpendCard threw -- API Spend card left unrendered:', e);
+      console.error('[CU][AgentSpend] renderAgentSpendCard threw -- card left unrendered:', e);
       return;
     }
 
@@ -2917,12 +2925,19 @@
 
   // API-spend lane: independent hub messages + initial REST fetch. Never touches the Claude or
   // Codex render paths, and vice versa.
-  conn.on('agentSpendUpdated', function(d) { _markServerContact(true); _agentSpendData = d; renderAgentSpend(); });
+  conn.on('agentSpendUpdated', function(d) {
+    console.log('[CU][AgentSpend] hub push received', d);
+    _markServerContact(true); _agentSpendData = d; renderAgentSpend();
+  });
 
+  console.log('[CU][AgentSpend] initial fetch starting');
   fetch('/api/agent-spend')
     .then(r => r.ok ? r.json() : null)
-    .then(d => { if (d) { _agentSpendData = d; renderAgentSpend(); } })
-    .catch(function() {});
+    .then(d => {
+      console.log('[CU][AgentSpend] initial fetch resolved', d);
+      if (d) { _agentSpendData = d; renderAgentSpend(); }
+    })
+    .catch(function(e) { console.log('[CU][AgentSpend] initial fetch failed', e); });
 
   // ---- Restart-detection: poll /api/instance while disconnected ----
   // Fires location.reload() as soon as the new server answers with a
@@ -3072,8 +3087,13 @@
       .then(function(s) { if (s !== undefined) { _codexStatus = s; renderCodex(); _markServerContact(false); } }).catch(function() {});
 
     // API-spend lane too (independent feed).
+    console.log('[CU][AgentSpend] forceRecovery fetch starting');
     fetch('/api/agent-spend').then(r => r.ok ? r.json() : null)
-      .then(function(d) { if (d) { _agentSpendData = d; renderAgentSpend(); _markServerContact(false); } }).catch(function() {});
+      .then(function(d) {
+        console.log('[CU][AgentSpend] forceRecovery fetch resolved', d);
+        if (d) { _agentSpendData = d; renderAgentSpend(); _markServerContact(false); }
+      })
+      .catch(function(e) { console.log('[CU][AgentSpend] forceRecovery fetch failed', e); });
 
     // 3. Revive the push channel so we return to low-latency updates rather than living on the poll.
     if (_signalrLoaded) {
@@ -3206,10 +3226,14 @@
     // API-spend lane too (independent feed) -- without this, a reconnect left the card frozen on
     // whatever it had before the drop (or still hidden, if it never got data before the drop) until
     // the next poller broadcast, up to 180s later.
+    console.log('[CU][AgentSpend] onreconnected fetch starting');
     fetch('/api/agent-spend')
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) { _agentSpendData = d; renderAgentSpend(); _markServerContact(false); } })
-      .catch(function() {});
+      .then(d => {
+        console.log('[CU][AgentSpend] onreconnected fetch resolved', d);
+        if (d) { _agentSpendData = d; renderAgentSpend(); _markServerContact(false); }
+      })
+      .catch(function(e) { console.log('[CU][AgentSpend] onreconnected fetch failed', e); });
   });
 
   conn.onclose(err => {
@@ -3236,7 +3260,10 @@
           .then(s => { if (s !== undefined) { _codexStatus = s; renderCodex(); } }).catch(function() {});
         // Poll the API-spend lane on the same fallback cadence (independent of the others).
         fetch('/api/agent-spend').then(r => r.ok ? r.json() : null)
-          .then(d => { if (d) { _agentSpendData = d; renderAgentSpend(); } }).catch(function() {});
+          .then(d => {
+            console.log('[CU][AgentSpend] no-hub-fallback poll resolved', d);
+            if (d) { _agentSpendData = d; renderAgentSpend(); }
+          }).catch(function(e) { console.log('[CU][AgentSpend] no-hub-fallback poll failed', e); });
       }, 15000);
       return;
     }
