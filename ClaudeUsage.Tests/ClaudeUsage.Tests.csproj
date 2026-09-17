@@ -18,6 +18,10 @@
     <Compile Include="..\Services\CodexUsageParser.cs" Link="CodexUsageParser.cs" />
     <Compile Include="..\Models\UsageData.cs" Link="UsageData.cs" />
     <Compile Include="..\Models\CodexUsageData.cs" Link="CodexUsageData.cs" />
+    <Compile Include="..\Models\AgentSpendData.cs" Link="AgentSpendData.cs" />
+    <Compile Include="..\Services\AgentSpendParser.cs" Link="AgentSpendParser.cs" />
+    <Compile Include="..\Services\AgentSpendReader.cs" Link="AgentSpendReader.cs" />
+    <Compile Include="..\Services\AgentSpendFreshnessPolicy.cs" Link="AgentSpendFreshnessPolicy.cs" />
   </ItemGroup>
 
   <ItemGroup>

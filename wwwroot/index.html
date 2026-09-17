@@ -145,6 +145,17 @@
       min-width: 0;   /* let the column shrink so its cards never clip at small widths */
     }
 
+    /* Same stacking as .usage-col but deliberately NOT matched by the .usage-col media-query rule
+       below -- used for the Codex / API-spend sub-sections nested inside #rightCol, so they stack
+       naturally by content height instead of each being stretched to fill half of rightCol's
+       vertical space. */
+    .usage-col-inner {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
+
     @media (min-width: 680px) {
       main {
         flex-direction: row;
@@ -509,6 +520,130 @@
       border: 1px solid var(--border);
       border-radius: 11px;
       padding: 11px 15px;
+    }
+
+    /* ---- API Spend card (home) ---- */
+    .agent-spend-card.stale {
+      filter: grayscale(45%) opacity(0.62);
+      transition: filter 0.4s, opacity 0.4s;
+    }
+    .spend-row { margin-bottom: 7px; }
+    .spend-row:last-of-type { margin-bottom: 4px; }
+    .spend-row-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 3px;
+    }
+    .spend-row-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .spend-row-value {
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .spend-footer {
+      margin-top: 2px;
+    }
+
+    /* ---- API Spend detail view ---- */
+    .spend-stat-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .spend-stat-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.76rem;
+    }
+    .spend-stat-label { color: var(--dim); }
+    .spend-stat-value {
+      color: var(--text);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+    .spend-history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    .spend-history-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.7rem;
+    }
+    .spend-history-date {
+      flex: 0 0 62px;
+      color: var(--dim);
+      font-variant-numeric: tabular-nums;
+    }
+    .spend-history-bar-track {
+      flex: 1;
+      height: 8px;
+      background: var(--track);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .spend-history-bar-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+    }
+    .spend-history-cost {
+      flex: 0 0 56px;
+      text-align: right;
+      color: var(--text);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .spend-history-unpriced {
+      flex-shrink: 0;
+      color: var(--muted);
+      font-size: 0.64rem;
+    }
+    .spend-table {
+      display: flex;
+      flex-direction: column;
+    }
+    .spend-table-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 4px 10px;
+      padding: 6px 0;
+    }
+    .spend-table-row + .spend-table-row { border-top: 1px solid var(--border); }
+    .spend-table-name {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .spend-table-sub {
+      font-weight: 400;
+      color: var(--muted);
+    }
+    .spend-table-cost {
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .spend-table-meta {
+      flex-basis: 100%;
+      font-size: 0.68rem;
+      color: var(--muted);
     }
 
     /* Unobtrusive reveal/hide link for untracked ("not tracked this period") windows. */
@@ -1112,7 +1247,14 @@
   <section class="usage-col" id="claudeCol">
     <div class="loading">Loading...</div>
   </section>
-  <section class="usage-col codex-col hidden" id="codexCol"></section>
+  <!-- Right-hand column: Codex lane on top, the API SPEND card underneath it (in the same
+       column so it fills the unused space below Codex in the wide/landscape layout, and simply
+       continues the stack in narrow/portrait). Each child manages its own visibility
+       independently -- Codex hides itself with no login; API spend hides itself with no data yet. -->
+  <section class="usage-col" id="rightCol">
+    <section class="usage-col-inner codex-col hidden" id="codexCol"></section>
+    <section class="usage-col-inner hidden" id="agentSpendCol"></section>
+  </section>
 </main>
 
 <div id="settingsView" class="settings-view hidden">
@@ -1256,6 +1398,14 @@
       <span class="legend-item"><svg width="22" height="6" style="display:block;flex-shrink:0"><line x1="0" y1="3" x2="22" y2="3" stroke="#2dd4bf" stroke-width="2" stroke-dasharray="3,2"/></svg>Week</span>
     </div>
   </div>
+</div>
+
+<div id="agentSpendDetailView" class="detail-view hidden">
+  <div class="detail-header">
+    <button class="back-btn" onclick="history.back()">&#8592; Back</button>
+    <span class="detail-title">API Spend</span>
+  </div>
+  <div id="agentSpendDetailBody"></div>
 </div>
 
 <div class="toolbar">
@@ -1480,6 +1630,8 @@
   let _codexData              = null;   // last CodexUsageData snapshot ({windows, creditsBalance, ...})
   let _codexStatus            = null;   // last CodexStatus ({state}); null until the first Codex poll
   let _codexCardDataMap       = {};     // detail-view lookup for Codex cards (kept separate from _cardDataMap)
+  // ---- API-spend lane state (fully independent of Claude/Codex above) ----
+  let _agentSpendData         = null;   // last AgentSpendData snapshot; null until the first good read
   // Per-window mid-period-reset tracking (keyed by the ORIGINAL API field name, e.g. five_hour,
   // seven_day). Anthropic sometimes resets a window's credit counter to 0 WITHOUT advancing
   // resetsAt -- utilization craters but the countdown keeps ticking through the same deadline.
@@ -2003,6 +2155,187 @@
     if (_openCardKey && _codexCardDataMap[_openCardKey]) _renderDetailContent(_openCardKey);
   }
 
+  // ---- API Spend lane rendering ----
+  // Independent of Claude/Codex: reads AgentSpendData straight off the wire and renders it as-is.
+  // No rolling-window/pricing/run-rate/model-provider aggregation happens here -- Agents &
+  // Inference already did that; this only formats numbers for display.
+
+  // Sensible round upper bounds for the shared home-card monetary scale: 1, 2, 5, 10, 20, 50, 100,
+  // 200, 500, 1000, ... -- picks the smallest step at or above the larger monthly run rate, so
+  // both pace bars share one axis and read at a glance relative to each other.
+  function _spendScaleMax(maxMonthly) {
+    const mult = [1, 2, 5];
+    let i = 0, decade = 1;
+    while (true) {
+      const candidate = mult[i % 3] * decade;
+      if (!(maxMonthly > candidate)) return candidate;   // handles NaN/undefined safely (false -> returns candidate)
+      i++;
+      if (i % 3 === 0) decade *= 10;
+    }
+  }
+
+  function _spendBar(value, scaleMax, color) {
+    const pct = scaleMax > 0 ? Math.max(0, Math.min(100, (value / scaleMax) * 100)) : 0;
+    return '<div class="track"><div class="fill" style="width:' + pct.toFixed(1) + '%;background:' + color + '"></div></div>';
+  }
+
+  function renderAgentSpendCard(data) {
+    const sym = currencySymbol(data.currency);
+    const r24 = data.rolling24h, r7 = data.rolling7d, mtd = data.monthToDate, rr = data.runRates;
+    const scaleMax = _spendScaleMax(Math.max(rr.monthlyAt24hPace || 0, rr.monthlyAt7dPace || 0));
+
+    const footerParts = [sym + mtd.totalCost.toFixed(2), mtd.pricedRuns + ' priced'];
+    if (mtd.unpricedRuns > 0) footerParts.push(mtd.unpricedRuns + ' unpriced');
+    const staleNote = data.isStale
+      ? ' &middot; <span style="color:var(--yellow)">stale, as of '
+        + new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '</span>'
+      : '';
+
+    return (
+      '<div class="card agent-spend-card' + (data.isStale ? ' stale' : '') + '" onclick="openAgentSpendDetail()" style="cursor:pointer">'
+      + '<div class="card-head"><span class="label">API Spend</span></div>'
+      + '<div class="spend-row">'
+      +   '<div class="spend-row-head"><span class="spend-row-label">24H PACE</span>'
+      +   '<span class="spend-row-value">' + sym + r24.totalCost.toFixed(2) + '/day &middot; ' + sym + rr.monthlyAt24hPace.toFixed(2) + '/mo</span></div>'
+      +   _spendBar(rr.monthlyAt24hPace, scaleMax, 'var(--accent)')
+      + '</div>'
+      + '<div class="spend-row">'
+      +   '<div class="spend-row-head"><span class="spend-row-label">7D PACE</span>'
+      +   '<span class="spend-row-value">' + sym + r7.dailyAverage.toFixed(2) + '/day &middot; ' + sym + rr.monthlyAt7dPace.toFixed(2) + '/mo</span></div>'
+      +   _spendBar(rr.monthlyAt7dPace, scaleMax, 'var(--yellow-green)')
+      + '</div>'
+      + '<div class="reset spend-footer">' + footerParts.join(' &middot; ') + staleNote + '</div>'
+      + '</div>');
+  }
+
+  function renderAgentSpend() {
+    const col = document.getElementById('agentSpendCol');
+    if (!_agentSpendData) {
+      col.classList.add('hidden');
+      col.innerHTML = '';
+      return;
+    }
+    col.classList.remove('hidden');
+    col.innerHTML = renderAgentSpendCard(_agentSpendData);
+
+    // If the API-spend detail view is currently open, refresh it from this poll too, mirroring the
+    // Claude/Codex "keep an open detail view live" behaviour.
+    if (!document.getElementById('agentSpendDetailView').classList.contains('hidden')) _renderAgentSpendDetail();
+  }
+
+  function _spendAvgCostPerRun(cost, priced, unpriced) {
+    const totalRuns = (priced || 0) + (unpriced || 0);
+    return totalRuns > 0 ? cost / totalRuns : 0;
+  }
+
+  function _spendStatRow(label, value) {
+    return '<div class="spend-stat-row"><span class="spend-stat-label">' + label + '</span>'
+      + '<span class="spend-stat-value">' + value + '</span></div>';
+  }
+
+  window.openAgentSpendDetail = function() {
+    if (!_agentSpendData) return;
+    const atMain = !history.state || history.state.view === 'main';
+    if (atMain) history.pushState({ view: 'agentSpendDetail' }, '');
+    else        history.replaceState({ view: 'agentSpendDetail' }, '');
+    _hideAllViews();
+    document.getElementById('agentSpendDetailView').classList.remove('hidden');
+    _renderAgentSpendDetail();
+    _checkToolbarOverflow();
+  };
+
+  function closeAgentSpendDetail() {
+    document.getElementById('agentSpendDetailView').classList.add('hidden');
+    document.getElementById('mainView').classList.remove('hidden');
+    _checkToolbarOverflow();
+  }
+  window.closeAgentSpendDetail = closeAgentSpendDetail;
+
+  function _renderAgentSpendDetail() {
+    const body = document.getElementById('agentSpendDetailBody');
+    const data = _agentSpendData;
+    if (!data) { body.innerHTML = '<div class="explain-block"><div class="explain-text">No spend data yet.</div></div>'; return; }
+
+    const sym       = currencySymbol(data.currency);
+    const r24       = data.rolling24h, r7 = data.rolling7d, mtd = data.monthToDate, rr = data.runRates;
+    const models     = data.breakdownByModel || [];
+    const providers  = data.breakdownByProvider || [];
+    const dailyHist  = data.dailyHistory || [];
+
+    const totalTokens   = models.reduce((s, m) => s + (m.inputTokens || 0) + (m.outputTokens || 0), 0);
+    const totalRuns     = mtd.pricedRuns + mtd.unpricedRuns;
+    const avgCostPerRun = _spendAvgCostPerRun(mtd.totalCost, mtd.pricedRuns, mtd.unpricedRuns);
+
+    let html = '<div class="explain-block">'
+      + '<div class="explain-title">Summary</div>'
+      + '<div class="spend-stat-grid">'
+      +   _spendStatRow('24h spend', sym + r24.totalCost.toFixed(3))
+      +   _spendStatRow('7d total', sym + r7.totalCost.toFixed(2))
+      +   _spendStatRow('7d daily average', sym + r7.dailyAverage.toFixed(2))
+      +   _spendStatRow('Month to date', sym + mtd.totalCost.toFixed(2))
+      +   _spendStatRow('Run-rate at 24h pace', sym + rr.monthlyAt24hPace.toFixed(2) + '/mo')
+      +   _spendStatRow('Run-rate at 7d pace', sym + rr.monthlyAt7dPace.toFixed(2) + '/mo')
+      +   _spendStatRow('Priced / unpriced runs (MTD)', mtd.pricedRuns + ' / ' + mtd.unpricedRuns)
+      +   _spendStatRow('Total runs (MTD)', String(totalRuns))
+      +   _spendStatRow('Average cost / run (MTD)', sym + avgCostPerRun.toFixed(4))
+      +   _spendStatRow('Token totals', totalTokens ? totalTokens.toLocaleString() : '--')
+      + '</div>'
+      + (data.isStale
+          ? '<div class="explain-text" style="color:var(--yellow);margin-top:6px">Stale &mdash; last generated '
+            + new Date(data.generatedAt).toLocaleString() + '</div>'
+          : '')
+      + '</div>';
+
+    html += '<div class="chart-card"><div class="chart-title">Daily spend (last ' + dailyHist.length + ' days)</div>';
+    if (!dailyHist.length) {
+      html += '<div class="explain-text">No daily history yet.</div>';
+    } else {
+      const maxCost = Math.max(0.01, ...dailyHist.map(h => h.cost || 0));
+      html += '<div class="spend-history-list">' + dailyHist.map(function(h) {
+        const pct = Math.max(0, Math.min(100, ((h.cost || 0) / maxCost) * 100));
+        return '<div class="spend-history-row">'
+          + '<span class="spend-history-date">' + h.date + '</span>'
+          + '<div class="spend-history-bar-track"><div class="spend-history-bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>'
+          + '<span class="spend-history-cost">' + sym + (h.cost || 0).toFixed(2) + '</span>'
+          + (h.unpricedRuns > 0 ? '<span class="spend-history-unpriced">' + h.unpricedRuns + ' unpriced</span>' : '')
+          + '</div>';
+      }).join('') + '</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="explain-block"><div class="explain-title">Spend by model</div>';
+    html += models.length
+      ? '<div class="spend-table">' + models.map(function(m) {
+          const avg = _spendAvgCostPerRun(m.cost, m.pricedRuns, m.unpricedRuns);
+          const tok = (m.inputTokens || 0) + (m.outputTokens || 0);
+          return '<div class="spend-table-row">'
+            + '<span class="spend-table-name">' + m.model
+            +   (m.provider ? ' <span class="spend-table-sub">(' + m.provider + ')</span>' : '') + '</span>'
+            + '<span class="spend-table-cost">' + sym + m.cost.toFixed(2) + '</span>'
+            + '<span class="spend-table-meta">' + m.pricedRuns + 'p'
+            +   (m.unpricedRuns ? ' / ' + m.unpricedRuns + 'u' : '')
+            +   (tok ? ' &middot; ' + tok.toLocaleString() + ' tok' : '')
+            +   ' &middot; avg ' + sym + avg.toFixed(4) + '</span>'
+            + '</div>';
+        }).join('') + '</div>'
+      : '<div class="explain-text">No per-model data yet.</div>';
+    html += '</div>';
+
+    html += '<div class="explain-block"><div class="explain-title">Spend by provider</div>';
+    html += providers.length
+      ? '<div class="spend-table">' + providers.map(function(p) {
+          return '<div class="spend-table-row">'
+            + '<span class="spend-table-name">' + p.provider + '</span>'
+            + '<span class="spend-table-cost">' + sym + p.cost.toFixed(2) + '</span>'
+            + '<span class="spend-table-meta">' + p.pricedRuns + 'p' + (p.unpricedRuns ? ' / ' + p.unpricedRuns + 'u' : '') + '</span>'
+            + '</div>';
+        }).join('') + '</div>'
+      : '<div class="explain-text">No per-provider data yet.</div>';
+    html += '</div>';
+
+    body.innerHTML = html;
+  }
+
   // Reveal/hide untracked windows, persisting the choice via its own endpoint (a partial
   // /api/settings POST would clobber the rest of settings -- see the dedicated endpoint).
   window.toggleUntracked = function() {
@@ -2461,6 +2794,7 @@
     document.getElementById('settingsView').classList.add('hidden');
     document.getElementById('detailView').classList.add('hidden');
     document.getElementById('statsView').classList.add('hidden');
+    document.getElementById('agentSpendDetailView').classList.add('hidden');
   }
 
   // Populates the detail view's CONTENT for a card key, and returns whether it could.
@@ -2554,6 +2888,15 @@
   fetch('/api/codex/usage')
     .then(r => r.ok ? r.json() : null)
     .then(d => { if (d) { _codexData = d; renderCodex(); } })
+    .catch(function() {});
+
+  // API-spend lane: independent hub messages + initial REST fetch. Never touches the Claude or
+  // Codex render paths, and vice versa.
+  conn.on('agentSpendUpdated', function(d) { _markServerContact(true); _agentSpendData = d; renderAgentSpend(); });
+
+  fetch('/api/agent-spend')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d) { _agentSpendData = d; renderAgentSpend(); } })
     .catch(function() {});
 
   // ---- Restart-detection: poll /api/instance while disconnected ----
@@ -2702,6 +3045,10 @@
       .then(function(d) { if (d) { _codexData = d; renderCodex(); _markServerContact(false); } }).catch(function() {});
     fetch('/api/codex/status').then(r => r.ok ? r.json() : undefined)
       .then(function(s) { if (s !== undefined) { _codexStatus = s; renderCodex(); _markServerContact(false); } }).catch(function() {});
+
+    // API-spend lane too (independent feed).
+    fetch('/api/agent-spend').then(r => r.ok ? r.json() : null)
+      .then(function(d) { if (d) { _agentSpendData = d; renderAgentSpend(); _markServerContact(false); } }).catch(function() {});
 
     // 3. Revive the push channel so we return to low-latency updates rather than living on the poll.
     if (_signalrLoaded) {
@@ -2854,6 +3201,9 @@
           .then(d => { if (d) { _codexData = d; renderCodex(); } }).catch(function() {});
         fetch('/api/codex/status').then(r => r.ok ? r.json() : undefined)
           .then(s => { if (s !== undefined) { _codexStatus = s; renderCodex(); } }).catch(function() {});
+        // Poll the API-spend lane on the same fallback cadence (independent of the others).
+        fetch('/api/agent-spend').then(r => r.ok ? r.json() : null)
+          .then(d => { if (d) { _agentSpendData = d; renderAgentSpend(); } }).catch(function() {});
       }, 15000);
       return;
     }
@@ -2955,6 +3305,7 @@
       if (_openCardKey !== null) closeDetail();
       else if (!document.getElementById('settingsView').classList.contains('hidden')) closeSettings();
       else if (!document.getElementById('statsView').classList.contains('hidden')) closeStats();
+      else if (!document.getElementById('agentSpendDetailView').classList.contains('hidden')) closeAgentSpendDetail();
     }
   });
 
@@ -3725,7 +4076,7 @@
   let _toolbarNeedsHide = false;
 
   function _checkToolbarOverflow() {
-    const ids = ['mainView', 'settingsView', 'detailView', 'statsView'];
+    const ids = ['mainView', 'settingsView', 'detailView', 'statsView', 'agentSpendDetailView'];
     for (let i = 0; i < ids.length; i++) {
       const el = document.getElementById(ids[i]);
       if (el && !el.classList.contains('hidden')) {
@@ -3753,7 +4104,7 @@
     if (_toolbarNeedsHide) _toolbarEl.classList.add('toolbar-hidden');
   }
 
-  ['mainView', 'settingsView', 'detailView', 'statsView'].forEach(function(id) {
+  ['mainView', 'settingsView', 'detailView', 'statsView', 'agentSpendDetailView'].forEach(function(id) {
     const el = document.getElementById(id);
     if (!el) return;
     let lastTop = 0;
