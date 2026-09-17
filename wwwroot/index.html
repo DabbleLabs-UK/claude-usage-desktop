@@ -3202,6 +3202,14 @@
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) { _markServerContact(false); render(d); } })
       .catch(function() {});
+
+    // API-spend lane too (independent feed) -- without this, a reconnect left the card frozen on
+    // whatever it had before the drop (or still hidden, if it never got data before the drop) until
+    // the next poller broadcast, up to 180s later.
+    fetch('/api/agent-spend')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) { _agentSpendData = d; renderAgentSpend(); _markServerContact(false); } })
+      .catch(function() {});
   });
 
   conn.onclose(err => {
