@@ -550,6 +550,16 @@
     .spend-footer {
       margin-top: 2px;
     }
+    /* Subtle fixed-ceiling reference under the two pace bars -- e.g. "$200/mo". Purely a scale
+       marker (not a budget claim), so it's deliberately quiet: small, muted, right-aligned to sit
+       under the bars' right edge like an axis tick label. */
+    .spend-scale-label {
+      font-size: 0.6rem;
+      color: var(--muted);
+      text-align: right;
+      margin-top: -1px;
+      margin-bottom: 4px;
+    }
 
     /* ---- API Spend detail view ---- */
     .spend-stat-grid {
@@ -2160,29 +2170,21 @@
   // No rolling-window/pricing/run-rate/model-provider aggregation happens here -- Agents &
   // Inference already did that; this only formats numbers for display.
 
-  // Sensible round upper bounds for the shared home-card monetary scale: 1, 2, 5, 10, 20, 50, 100,
-  // 200, 500, 1000, ... -- picks the smallest step at or above the larger monthly run rate, so
-  // both pace bars share one axis and read at a glance relative to each other.
-  function _spendScaleMax(maxMonthly) {
-    const mult = [1, 2, 5];
-    let i = 0, decade = 1;
-    while (true) {
-      const candidate = mult[i % 3] * decade;
-      if (!(maxMonthly > candidate)) return candidate;   // handles NaN/undefined safely (false -> returns candidate)
-      i++;
-      if (i % 3 === 0) decade *= 10;
-    }
-  }
+  // Fixed reference ceiling for both pace bars: bar width = (monthly run rate / this) * 100%,
+  // capped at 100%. Deliberately NOT an adaptive scale -- a fixed ceiling gives the bar a stable,
+  // genuine meaning ("how far toward $200/mo are you running?") instead of a shape that changes
+  // relative to itself every time spend moves. This is a visual reference point only, never a
+  // budget/quota claim -- the $X/day and $Y/mo figures next to it are the actual truth.
+  const SPEND_MONTHLY_CEILING = 200;
 
-  function _spendBar(value, scaleMax, color) {
-    const pct = scaleMax > 0 ? Math.max(0, Math.min(100, (value / scaleMax) * 100)) : 0;
+  function _spendBar(monthlyValue, color) {
+    const pct = Math.max(0, Math.min(100, ((monthlyValue || 0) / SPEND_MONTHLY_CEILING) * 100));
     return '<div class="track"><div class="fill" style="width:' + pct.toFixed(1) + '%;background:' + color + '"></div></div>';
   }
 
   function renderAgentSpendCard(data) {
     const sym = currencySymbol(data.currency);
     const r24 = data.rolling24h, r7 = data.rolling7d, mtd = data.monthToDate, rr = data.runRates;
-    const scaleMax = _spendScaleMax(Math.max(rr.monthlyAt24hPace || 0, rr.monthlyAt7dPace || 0));
 
     const footerParts = [sym + mtd.totalCost.toFixed(2), mtd.pricedRuns + ' priced'];
     if (mtd.unpricedRuns > 0) footerParts.push(mtd.unpricedRuns + ' unpriced');
@@ -2197,13 +2199,14 @@
       + '<div class="spend-row">'
       +   '<div class="spend-row-head"><span class="spend-row-label">24H PACE</span>'
       +   '<span class="spend-row-value">' + sym + r24.totalCost.toFixed(2) + '/day &middot; ' + sym + rr.monthlyAt24hPace.toFixed(2) + '/mo</span></div>'
-      +   _spendBar(rr.monthlyAt24hPace, scaleMax, 'var(--accent)')
+      +   _spendBar(rr.monthlyAt24hPace, 'var(--accent)')
       + '</div>'
       + '<div class="spend-row">'
       +   '<div class="spend-row-head"><span class="spend-row-label">7D PACE</span>'
       +   '<span class="spend-row-value">' + sym + r7.dailyAverage.toFixed(2) + '/day &middot; ' + sym + rr.monthlyAt7dPace.toFixed(2) + '/mo</span></div>'
-      +   _spendBar(rr.monthlyAt7dPace, scaleMax, 'var(--yellow-green)')
+      +   _spendBar(rr.monthlyAt7dPace, 'var(--yellow-green)')
       + '</div>'
+      + '<div class="spend-scale-label">' + sym + SPEND_MONTHLY_CEILING + '/mo</div>'
       + '<div class="reset spend-footer">' + footerParts.join(' &middot; ') + staleNote + '</div>'
       + '</div>');
   }
