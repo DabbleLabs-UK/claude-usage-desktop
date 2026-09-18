@@ -8,17 +8,11 @@ namespace ClaudeUsage.Services;
 //   Static -- no refresh token at all (env/settings override, or a `claude setup-token`).
 //             Nothing to refresh; the existing no-op path. It genuinely has no expiry, so
 //             expiresAt==0 here is meaningless, not a signal.
-//   Dead   -- a refresh token IS present but there is nothing left to refresh FROM: either
-//             expiresAt is 0/unset -- Claude Code's own signal that the LOGIN ITSELF has
-//             lapsed (it writes literal 0 on a dead login, never as a live token's real
-//             expiry) -- or the refresh token has its own expiry (refreshTokenExpiresAt) and
-//             that has already passed. Neither the CLI (`claude -p`) nor our own HTTP refresh
-//             can fix this; only an interactive `/login` can. Before this policy existed,
-//             expiresAt==0 with a refresh token present fell through IsExpiringSoon's "unknown
-//             expiry, don't guess" guard (meant for the Static case) and was silently never
-//             refreshed -- the app polled a dead token forever, eventually looping into the
-//             sticky-cooldown "waiting on Claude Code to refresh" banner with nothing ever
-//             actually coming.
+//   Dead   -- the access token is already unusable AND there is no usable refresh token: either
+//             expiresAt is 0/unset -- Claude Code's own signal that the LOGIN ITSELF has lapsed
+//             -- or both positive expiries are past. A lapsed refresh token must NOT make a still
+//             live access token look signed out: polling can continue until that access token
+//             expires, it just cannot be renewed automatically.
 //   Normal -- a live token, possibly stale/expiring, handled by the existing refresh machinery
 //             (proactive skew refresh, reactive 401 refresh, cooldown, etc).
 internal enum LoginState { Static, Dead, Normal }
@@ -30,7 +24,11 @@ internal static class LoginStatePolicy
     {
         if (!hasRefreshToken) return LoginState.Static;
         if (expiresAtMs <= 0) return LoginState.Dead;
-        if (refreshTokenExpiresAtMs > 0 && refreshTokenExpiresAtMs <= nowMs) return LoginState.Dead;
+        if (expiresAtMs <= nowMs && !CanRefresh(hasRefreshToken, refreshTokenExpiresAtMs, nowMs))
+            return LoginState.Dead;
         return LoginState.Normal;
     }
+
+    internal static bool CanRefresh(bool hasRefreshToken, long refreshTokenExpiresAtMs, long nowMs) =>
+        hasRefreshToken && (refreshTokenExpiresAtMs <= 0 || refreshTokenExpiresAtMs > nowMs);
 }

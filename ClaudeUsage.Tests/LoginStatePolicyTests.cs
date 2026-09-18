@@ -40,19 +40,28 @@ public class LoginStatePolicyTests
     }
 
     [Fact]
-    public void RefreshTokenExpiresAt_InThePast_IsDead_EvenWithLiveExpiresAt()
+    public void RefreshTokenExpired_AccessTokenStillLive_IsNormal()
     {
-        // expiresAt still looks live, but the refresh token itself has lapsed -- still dead,
-        // since nothing can renew the access token once it does expire.
-        Assert.Equal(LoginState.Dead, LoginStatePolicy.Classify(
+        // A lapsed refresh token prevents a future renewal, but it must not block usage polling
+        // while the current access token remains valid.
+        Assert.Equal(LoginState.Normal, LoginStatePolicy.Classify(
             hasRefreshToken: true, expiresAtMs: Now + OneHour, refreshTokenExpiresAtMs: Now - 1, nowMs: Now));
     }
 
     [Fact]
-    public void RefreshTokenExpiresAt_ExactlyNow_IsDead()
+    public void AccessAndRefreshTokensExpired_IsDead()
     {
         Assert.Equal(LoginState.Dead, LoginStatePolicy.Classify(
-            hasRefreshToken: true, expiresAtMs: Now + OneHour, refreshTokenExpiresAtMs: Now, nowMs: Now));
+            hasRefreshToken: true, expiresAtMs: Now - 1, refreshTokenExpiresAtMs: Now - 1, nowMs: Now));
+    }
+
+    [Fact]
+    public void CanRefresh_RequiresARefreshTokenThatHasNotExpired()
+    {
+        Assert.False(LoginStatePolicy.CanRefresh(false, Now + OneHour, Now));
+        Assert.False(LoginStatePolicy.CanRefresh(true, Now - 1, Now));
+        Assert.True(LoginStatePolicy.CanRefresh(true, 0, Now));
+        Assert.True(LoginStatePolicy.CanRefresh(true, Now + OneHour, Now));
     }
 
     [Fact]

@@ -95,13 +95,10 @@ public sealed class UsageService
         var (creds, credSource) = await ResolveCredentialsAsync(_settings);
 
         // --- DEAD LOGIN short-circuit --------------------------------------------------------
-        // A refresh token present alongside expiresAt==0 (Claude Code's own signal that the
-        // LOGIN, not just the access token, has lapsed) or a refreshTokenExpiresAt already in
-        // the past means neither the CLI (`claude -p`) nor our own HTTP refresh can recover
-        // this -- only an interactive `/login` can. Detect it BEFORE any refresh/poll attempt
-        // so we never burn a CLI spawn or a network call on a login that cannot come back on
-        // its own, and never fall into the sticky-cooldown "waiting on Claude Code" limbo that
-        // has nothing actually coming.
+        // A zero/unset access expiry is Claude Code's own signal that the LOGIN, not merely the
+        // refresh path, has lapsed. A positive access expiry remains usable even if its refresh
+        // token already expired, so keep polling with it until it really expires. Only then is
+        // interactive `/login` the sole recovery path.
         var nowMsForClassify = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var loginState = LoginStatePolicy.Classify(
             creds.RefreshToken is not null, creds.ExpiresAt, creds.RefreshTokenExpiresAt, nowMsForClassify);
@@ -114,6 +111,10 @@ public sealed class UsageService
                 "skipping CLI/network refresh attempts -- only /login can fix this.");
             throw new DeadLoginException();
         }
+
+        var canRefresh = LoginStatePolicy.CanRefresh(
+            creds.RefreshToken is not null, creds.RefreshTokenExpiresAt, nowMsForClassify);
+        var refreshToken = creds.RefreshToken;
 
         // At most ONE refresh attempt per poll cycle (same burst-protection discipline as
         // the poller's backoff). Proactive consumes the attempt; if it ran, reactive won't.
@@ -141,11 +142,11 @@ public sealed class UsageService
             _authLog.Log(
                 $"POLL token-source={credSource} proactive-check: expiresAt={creds.ExpiresAt} ({FormatMs(creds.ExpiresAt)}) " +
                 $"remaining={remainingMs}ms (~{remainingMs / 1000}s) skew={RefreshSkewMs}ms " +
-                $"refreshTokenPresent={hasRefresh} expiringSoon={expiringSoon} " +
-                $"=> proactiveTrigger={hasRefresh && expiringSoon}");
+                $"refreshTokenPresent={hasRefresh} refreshAvailable={canRefresh} expiringSoon={expiringSoon} " +
+                $"=> proactiveTrigger={canRefresh && expiringSoon}");
         }
 
-        if (creds.RefreshToken is not null && IsExpiringSoon(creds.ExpiresAt))
+        if (canRefresh && refreshToken is not null && IsExpiringSoon(creds.ExpiresAt))
         {
             // `creds` was just read from disk at the top of this method, so it already reflects any
             // token the host `claude` CLI refreshed on its own. Reaching here means the freshly-read
@@ -173,7 +174,7 @@ public sealed class UsageService
                 // 429s; kept as a fallback in case the endpoint behaviour ever changes).
                 refreshAttempted = true;
                 _authLog.Log("PROACTIVE NETWORK-REFRESH firing (CLI ineffective, gate open).");
-                var refreshed = await TryRefreshAsync(creds.RefreshToken);
+                var refreshed = await TryRefreshAsync(refreshToken);
                 if (refreshed is not null)
                 {
                     creds = refreshed;
@@ -196,7 +197,8 @@ public sealed class UsageService
         catch (HttpRequestException ex)
             when (ex.StatusCode == HttpStatusCode.Unauthorized
                   && !refreshAttempted
-                  && creds.RefreshToken is not null)
+                  && canRefresh
+                  && refreshToken is not null)
         {
             // --- REACTIVE refresh ----------------------------------------------------------
             // The poll came back 401 and we have NOT already spent our refresh this cycle.
@@ -225,7 +227,7 @@ public sealed class UsageService
             }
             _authLog.Log("REACTIVE NETWORK-REFRESH: poll 401, gate open, refresh token present => one reactive refresh.");
             _logger.LogWarning("Usage poll returned 401; attempting one token refresh.");
-            var refreshed = await TryRefreshAsync(creds.RefreshToken);
+            var refreshed = await TryRefreshAsync(refreshToken);
             if (refreshed is null)
             {
                 _authLog.Log("REACTIVE refresh failed; propagating 401 to poller backoff.");
@@ -241,7 +243,7 @@ public sealed class UsageService
             // the exact state that leaves the auth-error card stuck -- record why no retry.
             _authLog.Log(
                 $"POLL 401 NOT retried: refreshAttempted={refreshAttempted} " +
-                $"refreshTokenPresent={creds.RefreshToken is not null}; propagating to poller backoff.");
+                $"refreshAvailable={canRefresh}; propagating to poller backoff.");
             throw;
         }
     }

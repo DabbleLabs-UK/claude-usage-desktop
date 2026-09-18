@@ -129,8 +129,8 @@ public sealed class UsagePoller : BackgroundService
             // state instead of the "waiting on Claude Code to refresh" banner, and hold the base
             // cadence (no ramp) so the moment the user runs /login, the next cycle's disk read
             // picks up the fresh token immediately.
-            _logger.LogWarning("Dead login detected (expiresAt==0 with refresh token present, or refresh token itself expired); awaiting manual /login.");
-            _pollLog.LogFailure("dead login detected (expiresAt==0+refreshToken, or refreshTokenExpiresAt past); awaiting manual /login, no refresh attempted");
+            _logger.LogWarning("Dead login detected (access token is unusable and cannot be refreshed); awaiting manual /login.");
+            _pollLog.LogFailure("dead login detected (access token is unusable and cannot be refreshed); awaiting manual /login, no refresh attempted");
             _state.MarkStale();
             await ApplySignedOutAsync(ct);
             if (_state.Current is { } stale)
