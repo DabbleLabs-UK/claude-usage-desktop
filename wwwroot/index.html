@@ -2184,6 +2184,23 @@
     return '<div class="track"><div class="fill" style="width:' + pct.toFixed(1) + '%;background:' + color + '"></div></div>';
   }
 
+  // Compact relative age for a stale timestamp, e.g. " (1d 3h ago)". Returns '' for a
+  // missing/unparseable/future timestamp so it can be concatenated unconditionally without ever
+  // printing a broken "(NaN ago)" -- same never-throw discipline as renderAgentSpendCard below.
+  function _relativeAge(ts) {
+    const t = new Date(ts).getTime();
+    if (!isFinite(t)) return '';
+    const diffMs = Date.now() - t;
+    if (diffMs < 0) return '';
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return ' (just now)';
+    const d = Math.floor(mins / 1440);
+    const h = Math.floor((mins % 1440) / 60);
+    const m = mins % 60;
+    const s = d > 0 ? (d + 'd ' + h + 'h') : (h > 0 ? (h + 'h ' + m + 'm') : (m + 'm'));
+    return ' (' + s + ' ago)';
+  }
+
   // Defensive against any real-world payload shape this hasn't been tested against (a nested
   // object present-but-partially-populated, a number arriving as a string, etc.) -- '|| {}' /
   // Number(...) || 0 coercions mean this can NEVER throw, so a render fault can never be the
@@ -2197,7 +2214,8 @@
     if (num(mtd.unpricedRuns) > 0) footerParts.push(num(mtd.unpricedRuns) + ' unpriced');
     const staleNote = data.isStale
       ? ' &middot; <span style="color:var(--yellow)">stale, as of '
-        + new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '</span>'
+        + new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        + _relativeAge(data.generatedAt) + '</span>'
       : '';
 
     return (
@@ -2318,7 +2336,7 @@
       + '</div>'
       + (data.isStale
           ? '<div class="explain-text" style="color:var(--yellow);margin-top:6px">Stale &mdash; last generated '
-            + new Date(data.generatedAt).toLocaleString() + '</div>'
+            + new Date(data.generatedAt).toLocaleString() + _relativeAge(data.generatedAt) + '</div>'
           : '')
       + '</div>';
 
