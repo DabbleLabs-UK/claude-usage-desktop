@@ -14,6 +14,7 @@ public sealed class UsagePoller : BackgroundService
     private const int MaxIntervalSec  = 1800;
 
     private readonly UsageService _usageService;
+    private readonly UsageRelayClient _relayClient;
     private readonly UsageState _state;
     private readonly UsageLog _log;
     private readonly PollLog _pollLog;
@@ -26,6 +27,7 @@ public sealed class UsagePoller : BackgroundService
 
     public UsagePoller(
         UsageService usageService,
+        UsageRelayClient relayClient,
         UsageState state,
         UsageLog log,
         PollLog pollLog,
@@ -33,6 +35,7 @@ public sealed class UsagePoller : BackgroundService
         ILogger<UsagePoller> logger)
     {
         _usageService = usageService;
+        _relayClient = relayClient;
         _state = state;
         _log = log;
         _pollLog = pollLog;
@@ -100,7 +103,10 @@ public sealed class UsagePoller : BackgroundService
 
         try
         {
-            var data = await _usageService.FetchAsync();
+            // An opt-in relay is a separate Claude Code host. If it has a fresh snapshot, that is
+            // more representative than this PC's login and prevents an unrelated local logout from
+            // incorrectly making a remote user's live usage look stale.
+            var data = await _relayClient.TryFetchFreshAsync(ct) ?? await _usageService.FetchAsync();
             _state.Update(data);
 
             // Persist a sample on success only (never on a failed poll). Best-effort:

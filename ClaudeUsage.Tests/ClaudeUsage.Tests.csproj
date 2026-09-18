@@ -22,6 +22,7 @@
     <Compile Include="..\Services\AgentSpendParser.cs" Link="AgentSpendParser.cs" />
     <Compile Include="..\Services\AgentSpendReader.cs" Link="AgentSpendReader.cs" />
     <Compile Include="..\Services\AgentSpendFreshnessPolicy.cs" Link="AgentSpendFreshnessPolicy.cs" />
+    <Compile Include="..\Services\UsageRelayAuthorization.cs" Link="UsageRelayAuthorization.cs" />
   </ItemGroup>
 
   <ItemGroup>

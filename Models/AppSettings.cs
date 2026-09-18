@@ -36,7 +36,15 @@ public record AppSettings(
     // view behind a small "show N not tracked" toggle, instead of rendering permanently greyed.
     // A window that later returns real data reappears automatically regardless of this flag.
     // Toggled via the inline reveal link (POST /api/untracked-windows).
-    bool ShowUntrackedWindows = false);
+    bool ShowUntrackedWindows = false,
+    // Optional, data-only Claude Usage relays on other machines. A relay owns its local Claude
+    // login; this app receives only the already-calculated usage windows and their timestamp.
+    // Empty by default, so the ordinary one-PC experience remains entirely local.
+    UsageRelaySource[]? UsageRelaySources = null);
+
+// A deliberately small, portable relay configuration. The access token protects the relay's LAN
+// endpoint; it is not a Claude credential and cannot be used to make Claude requests.
+public record UsageRelaySource(string Name, string Url, string AccessToken);
 
 // Body for POST /api/hints/dismiss — the id of the hint card being dismissed.
 public record HintDismissRequest(string Id);

@@ -7,11 +7,11 @@ local web page you can open on your phone from the same Wi-Fi network.
 
 ---
 
-> **Requires Claude Code running on this machine.**
+> **Requires Claude Code running on this machine, or an optional relay.**
 > The app reads Claude Code's local credential and usage data directly from your
-> machine. It cannot fetch your usage remotely. You must be running Claude Code
-> (the CLI tool or desktop app) on the same Windows PC for this app to have
-> anything to show.
+> machine. By default it is completely local. If you use Claude Code on another
+> Windows PC, you can opt in to its data-only relay described below; the remote
+> PC keeps its Claude sign-in private.
 
 ---
 
@@ -44,6 +44,44 @@ Open **Settings** (gear icon in the toolbar) to see the LAN URL and QR code.
 On any device connected to the same Wi-Fi, scan the QR code or browse to the
 URL shown (e.g. `http://192.168.1.x:5005`). The app prompts once to open the
 Windows firewall port -- click *Yes* in the UAC prompt to allow it.
+
+### Optional: monitor Claude Code on another Windows PC
+
+This is for people who use Claude Code in a terminal on one Windows PC and keep
+Claude Usage Desktop open on another. It is opt-in: no computer discovery, SSH,
+cloud service, or credential copying is involved.
+
+1. Put the same Claude Usage Desktop build on the PC where Claude Code runs.
+2. On that PC, run the relay from a terminal, choosing a long random token:
+
+   ```bash
+   ClaudeUsage.exe --relay --relay-port 5055 --relay-token "choose-a-long-random-token"
+   ```
+
+   The relay exposes only `GET /v1/usage`, requires the token in a request
+   header, and returns usage windows plus their timestamp. It never returns a
+   Claude access token, refresh token, prompts, responses, command history, or
+   local file paths.
+3. Allow TCP port 5055 through the relay PC's firewall only for the private LAN
+   you trust.
+4. On the viewing PC, add this to `%APPDATA%\ClaudeUsage\settings.json` while
+   the app is closed (substitute the relay PC's LAN name or IP):
+
+   ```json
+   {
+     "usageRelaySources": [
+       {
+         "name": "Work PC",
+         "url": "http://work-pc:5055/v1/usage",
+         "accessToken": "choose-a-long-random-token"
+       }
+     ]
+   }
+   ```
+
+   Existing settings may remain in the file. Claude Usage prefers the freshest
+   authenticated relay snapshot. If no relay is healthy, it falls back to the
+   local Claude Code login exactly as before.
 
 ---
 
@@ -79,8 +117,9 @@ Windows firewall port -- click *Yes* in the UAC prompt to allow it.
   notice. Use at your own risk; the app may break after a Claude Code update.
 - **Windows only for now.** Cross-platform (macOS / Linux) support is planned but
   not yet implemented.
-- **No remote access.** The app reads local credentials only. It does not connect
-  to any third-party service or send your usage data anywhere.
+- **Remote relays are optional.** By default the app reads only local
+  credentials. An explicitly configured relay sends a data-only snapshot over
+  your own LAN; it does not contact a third-party service or copy credentials.
 
 ---
 

@@ -488,6 +488,7 @@ public partial class App : Application
         builder.Services.AddSingleton<PollLog>();
         builder.Services.AddSingleton<ClaudeCli>();
         builder.Services.AddSingleton<UsageService>();
+        builder.Services.AddHttpClient<UsageRelayClient>(client => client.Timeout = TimeSpan.FromSeconds(5));
         builder.Services.AddSingleton<UsagePoller>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<UsagePoller>());
 
@@ -650,11 +651,19 @@ public partial class App : Application
                 ? body.ShowUntrackedWindows
                 : settings.Current.ShowUntrackedWindows;
 
+            // Relay sources are advanced settings.json-only configuration. Preserve them when the
+            // ordinary Settings page posts its smaller form, just as we do the CLI override.
+            var mergedRelaySources = root.ValueKind == JsonValueKind.Object
+                                     && root.TryGetProperty("usageRelaySources", out _)
+                ? body.UsageRelaySources
+                : settings.Current.UsageRelaySources;
+
             var merged = body with
             {
                 ClaudeCliPath = mergedCliPath,
                 AutoRefreshLogin = mergedAutoRefresh,
                 ShowUntrackedWindows = mergedShowUntracked,
+                UsageRelaySources = mergedRelaySources,
             };
             settings.Save(merged);
             return Results.Ok(settings.Current with { StartWithWindows = settings.GetActualAutostart() });
