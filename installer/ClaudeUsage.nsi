@@ -163,6 +163,8 @@ Section "${APP_NAME} (required)" SEC_CORE
   File "${DIST_DIR}\wwwroot\favicon.ico"
   File "${DIST_DIR}\wwwroot\index.html"
   File "${DIST_DIR}\wwwroot\logo_dabblelabs.png"
+  SetOutPath "$INSTDIR\tools"
+  File "${DIST_DIR}\tools\install-relay-startup.ps1"
 
   ; --- Start Menu shortcut (working dir = install dir) -----------------------
   SetOutPath "$INSTDIR"
@@ -246,6 +248,8 @@ Section "Uninstall"
   Delete "$INSTDIR\wwwroot\favicon.ico"
   Delete "$INSTDIR\wwwroot\index.html"
   Delete "$INSTDIR\wwwroot\logo_dabblelabs.png"
+  Delete "$INSTDIR\tools\install-relay-startup.ps1"
+  RMDir "$INSTDIR\tools"
   Delete "$INSTDIR\runtimes\win-x64\native\WebView2Loader.dll"
   Delete "$INSTDIR\Uninstall.exe"
 

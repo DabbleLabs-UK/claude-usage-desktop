@@ -24,6 +24,13 @@ public static class Program
         {
             var port = ReadIntOption(args, "--relay-port", 5055);
             var token = ReadOption(args, "--relay-token");
+            var tokenFile = ReadOption(args, "--relay-token-file");
+            if (tokenFile is not null)
+            {
+                try { token = System.IO.File.ReadAllText(tokenFile).Trim(); }
+                catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+                { return 2; }
+            }
             return ClaudeUsage.Services.UsageRelayHost.RunAsync(port, token ?? "").GetAwaiter().GetResult();
         }
 

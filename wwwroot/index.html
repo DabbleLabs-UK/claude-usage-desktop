@@ -1246,12 +1246,15 @@
 <div id="backoffBanner" class="backoff-banner hidden">
   <div class="backoff-banner-head">
     <span class="backoff-banner-title" id="backoffTitle"></span>
+    <button type="button" class="backoff-whatsthis" onclick="retryUsage(this)">Retry now</button>
     <button type="button" class="backoff-whatsthis" id="backoffWhatsThis" onclick="toggleBackoffExplain()">What&rsquo;s this?</button>
   </div>
   <div class="backoff-explain hidden" id="backoffExplain"></div>
+  <div class="backoff-stale-info" id="sourceFailureDetail"></div>
   <div class="backoff-stale-info hidden" id="backoffStaleInfo"></div>
 </div>
 
+<div id="usageSource" class="backoff-stale-info" style="padding: 4px 20px" aria-live="polite"></div>
 <main id="mainView">
   <!-- Two independent columns: Claude (left/top) and Codex (right/bottom). At a wide viewport
        they sit side by side; when narrow they stack. The Codex column is hidden entirely until a
@@ -2404,6 +2407,8 @@
 
   function render(data) {
     lastData = data;
+    document.getElementById('usageSource').textContent = data && data.source
+      ? (data.isStale ? 'Last reading from: ' : 'Usage from: ') + data.source : '';
     // Remember the last payload that carries real windows as the fallback to show (dimmed)
     // during backoff. Fresh (non-stale) data always wins; a stale payload is accepted only
     // when we have nothing better yet -- e.g. the last-known sample seeded on relaunch, so
@@ -2520,6 +2525,16 @@
   function _authBannerContent() {
     const s = _backoffState || {};
     const t = s.state;
+    if (t === 'sourcesUnavailable') {
+      return {
+        action: false,
+        title: 'Waiting for a usage source - retrying automatically',
+        explain: 'The source status below identifies which connection needs attention. '
+          + 'If a remote computer is asleep, wake it; if its relay stopped, restart the relay. '
+          + 'Running Claude on one computer does not renew the sign-in on another. '
+          + 'The last reading stays visible until a source supplies fresh data.',
+      };
+    }
 
     // OFFLINE — local connectivity loss (no network, DNS/route failure, timeout). Not a server
     // or sign-in problem; it reconnects on its own the moment the connection is back.
@@ -2568,7 +2583,7 @@
     if (t === 'signedOut') {
       return {
         action: true,
-        title: 'Signed out of Claude Code',
+        title: 'Claude sign-in on this PC needs attention',
         explain:
             '<strong>What happened:</strong> the Claude sign-in saved on this PC has fully lapsed — '
           + 'this isn’t a brief refresh wait, it’s actually signed out. Claude Usage can’t fetch '
@@ -2604,10 +2619,10 @@
     if (t === 'authError') {
       return {
         action: true,
-        title: 'Can’t reach your usage — Claude login expired',
+        title: 'Cannot refresh usage on this PC',
         explain:
-            '<strong>What happened:</strong> the Claude sign-in saved on this PC has expired, so '
-          + 'Claude Usage can’t fetch fresh numbers. The figures below are paused and shown '
+            '<strong>What happened:</strong> this PC could not fetch a fresh reading. '
+          + 'Its saved sign-in may need attention. The figures below are paused and shown '
           + 'dimmed.<br><br>'
           + '<strong>What to do:</strong> open Claude Code (or run any <em>claude</em> command) to '
           + 'sign in again. Claude Usage picks the refreshed sign-in up automatically — no '
@@ -2630,6 +2645,14 @@
   }
 
   let _explainOpen   = false;
+  window.retryUsage = async function(button) {
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/usage/retry', { method: 'POST' });
+      button.textContent = response.ok ? 'Retry requested' : 'Retry shortly';
+    } catch (_) { button.textContent = 'Desktop unreachable'; }
+    setTimeout(function() { button.disabled = false; button.textContent = 'Retry now'; }, 15000);
+  };
   let _lastBannerKey = null;   // so the 1s tick doesn't clobber the open explainer's text
 
   function toggleBackoffExplain() {
@@ -2699,6 +2722,7 @@
     // Calm, cause-adapted surface text. Only rebuild when the case actually changes, so the
     // per-second tick can't interrupt reading/selecting the open explainer.
     const c = _authBannerContent();
+    document.getElementById('sourceFailureDetail').textContent = _backoffState.detail || '';
     const key = c.title + '|' + (c.action ? 'a' : 'c') + '|' + (_autoRefreshLogin ? 'ar1' : 'ar0');
     if (key !== _lastBannerKey) {
       _lastBannerKey = key;

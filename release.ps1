@@ -310,7 +310,7 @@ $shipped = 'ClaudeUsage.exe','aspnetcorev2_inprocess.dll','D3DCompiler_47_cor3.d
     'PenImc_cor3.dll','PresentationNative_cor3.dll','vcruntime140_cor3.dll',
     'WebView2Loader.dll','wpfgfx_cor3.dll','Microsoft.Web.WebView2.Core.xml',
     'Microsoft.Web.WebView2.WinForms.xml','Microsoft.Web.WebView2.Wpf.xml',
-    'runtimes','wwwroot'
+    'runtimes','wwwroot','tools'
 $unknown = Get-ChildItem -LiteralPath $DistDir | Where-Object {
     $_.Name -notin $shipped -and
     $_.Name -notmatch '\.(old|bak|stuck|prev|pdb|zip)|\.WebView2$|^_pkg$|^\.|^RELEASE_NOTES|_old\.exe$' -and

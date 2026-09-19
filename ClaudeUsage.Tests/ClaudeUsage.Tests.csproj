@@ -24,6 +24,13 @@
     <Compile Include="..\Services\AgentSpendFreshnessPolicy.cs" Link="AgentSpendFreshnessPolicy.cs" />
     <Compile Include="..\Services\UsageRelayAuthorization.cs" Link="UsageRelayAuthorization.cs" />
     <Compile Include="..\Services\UsageRecoveryPolicy.cs" Link="UsageRecoveryPolicy.cs" />
+    <Compile Include="..\Models\AppSettings.cs" Link="AppSettings.cs" />
+    <Compile Include="..\Services\SettingsPrivacy.cs" Link="SettingsPrivacy.cs" />
+    <Compile Include="..\Services\UsageRelayClient.cs" Link="UsageRelayClient.cs" />
+    <Compile Include="..\Services\UsageRelayPolicy.cs" Link="UsageRelayPolicy.cs" />
+    <Compile Include="..\Services\UsageState.cs" Link="UsageState.cs" />
+    <Compile Include="..\Services\RelaySnapshotStore.cs" Link="RelaySnapshotStore.cs" />
+    <Compile Include="..\Services\UsageSourceSelector.cs" Link="UsageSourceSelector.cs" />
   </ItemGroup>
 
   <ItemGroup>

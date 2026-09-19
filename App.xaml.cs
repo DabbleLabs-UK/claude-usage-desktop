@@ -488,7 +488,11 @@ public partial class App : Application
         builder.Services.AddSingleton<PollLog>();
         builder.Services.AddSingleton<ClaudeCli>();
         builder.Services.AddSingleton<UsageService>();
-        builder.Services.AddHttpClient<UsageRelayClient>(client => client.Timeout = TimeSpan.FromSeconds(5));
+        builder.Services.AddHttpClient("usage-relay", client => client.Timeout = TimeSpan.FromSeconds(10))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
+        builder.Services.AddSingleton(sp => new UsageRelayClient(
+            sp.GetRequiredService<System.Net.Http.IHttpClientFactory>().CreateClient("usage-relay"),
+            () => SettingsService.Current.UsageRelaySources));
         builder.Services.AddSingleton<UsagePoller>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<UsagePoller>());
 
@@ -565,6 +569,9 @@ public partial class App : Application
         app.MapGet("/api/backoff", (UsageState state) =>
             Results.Ok(state.Backoff));
 
+        app.MapPost("/api/usage/retry", (UsagePoller poller) =>
+            poller.RequestRetry() ? Results.Accepted() : Results.StatusCode(429));
+
         // Codex lane -- separate endpoints so the frontend polls it independently of Claude. Usage
         // 404s until the first successful Codex poll; status is null until the first cycle (the UI
         // treats null / noToken as "hide the Codex section").
@@ -619,7 +626,7 @@ public partial class App : Application
         });
 
         app.MapGet("/api/settings", (SettingsService settings) =>
-            Results.Ok(settings.Current with { StartWithWindows = settings.GetActualAutostart() }));
+            Results.Ok(settings.PublicSettings()));
 
         app.MapPost("/api/settings", async (HttpRequest request, SettingsService settings) =>
         {
@@ -653,20 +660,18 @@ public partial class App : Application
 
             // Relay sources are advanced settings.json-only configuration. Preserve them when the
             // ordinary Settings page posts its smaller form, just as we do the CLI override.
-            var mergedRelaySources = root.ValueKind == JsonValueKind.Object
-                                     && root.TryGetProperty("usageRelaySources", out _)
-                ? body.UsageRelaySources
-                : settings.Current.UsageRelaySources;
+            var mergedRelaySources = settings.Current.UsageRelaySources;
 
             var merged = body with
             {
                 ClaudeCliPath = mergedCliPath,
+                ClaudeCodeOauthToken = settings.Current.ClaudeCodeOauthToken,
                 AutoRefreshLogin = mergedAutoRefresh,
                 ShowUntrackedWindows = mergedShowUntracked,
                 UsageRelaySources = mergedRelaySources,
             };
             settings.Save(merged);
-            return Results.Ok(settings.Current with { StartWithWindows = settings.GetActualAutostart() });
+            return Results.Ok(settings.PublicSettings());
         });
 
         app.MapGet("/api/network-info", (SettingsService settings) =>

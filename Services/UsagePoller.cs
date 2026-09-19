@@ -15,6 +15,7 @@ public sealed class UsagePoller : BackgroundService
 
     private readonly UsageService _usageService;
     private readonly UsageRelayClient _relayClient;
+    private readonly SettingsService _settings;
     private readonly UsageState _state;
     private readonly UsageLog _log;
     private readonly PollLog _pollLog;
@@ -24,10 +25,22 @@ public sealed class UsagePoller : BackgroundService
 
     private int _failureCount    = 0;
     private int _currentInterval = BaseIntervalSec;
+    private long _lastManualRetry;
+
+    public bool RequestRetry()
+    {
+        var now = Environment.TickCount64;
+        var previous = Interlocked.Read(ref _lastManualRetry);
+        if (previous != 0 && now - previous < 15000) return false;
+        if (Interlocked.CompareExchange(ref _lastManualRetry, now, previous) != previous) return false;
+        TriggerImmediatePoll();
+        return true;
+    }
 
     public UsagePoller(
         UsageService usageService,
         UsageRelayClient relayClient,
+        SettingsService settings,
         UsageState state,
         UsageLog log,
         PollLog pollLog,
@@ -36,6 +49,7 @@ public sealed class UsagePoller : BackgroundService
     {
         _usageService = usageService;
         _relayClient = relayClient;
+        _settings = settings;
         _state = state;
         _log = log;
         _pollLog = pollLog;
@@ -72,9 +86,10 @@ public sealed class UsagePoller : BackgroundService
             using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
             try
             {
-                await Task.WhenAny(
+                var completed = await Task.WhenAny(
                     Task.Delay(TimeSpan.FromSeconds(_currentInterval), delayCts.Token),
-                    _wakeSignal.WaitAsync(stoppingToken));
+                    _wakeSignal.WaitAsync(delayCts.Token));
+                await completed;
             }
             finally
             {
@@ -85,6 +100,7 @@ public sealed class UsagePoller : BackgroundService
 
     private async Task PollAsync(CancellationToken ct)
     {
+        _settings.Reload();
         // Cheap pre-check: if the OS reports no usable network at all, don't even attempt the
         // poll (and don't ramp the backoff). This is the "(b) connectivity loss" case -- hold the
         // base cadence so we recover promptly when the link returns. NOTE: GetIsNetworkAvailable
@@ -106,7 +122,7 @@ public sealed class UsagePoller : BackgroundService
             // An opt-in relay is a separate Claude Code host. If it has a fresh snapshot, that is
             // more representative than this PC's login and prevents an unrelated local logout from
             // incorrectly making a remote user's live usage look stale.
-            var data = await _relayClient.TryFetchFreshAsync(ct) ?? await _usageService.FetchAsync();
+            var data = await UsageSourceSelector.FetchAsync(_relayClient, _usageService.FetchAsync, ct);
             _state.Update(data);
 
             // Persist a sample on success only (never on a failed poll). Best-effort:
@@ -114,7 +130,7 @@ public sealed class UsagePoller : BackgroundService
             _log.Append(data);
 
             // Clear backoff on success
-            if (UsageRecoveryPolicy.ShouldClearBackoff(_failureCount, _state.Backoff))
+            // Always broadcast recovery, including zero-counter waiting states and reconnecting clients.
             {
                 _failureCount    = 0;
                 _currentInterval = BaseIntervalSec;
@@ -127,6 +143,16 @@ public sealed class UsagePoller : BackgroundService
                 data.Windows.GetValueOrDefault("five_hour")?.Utilization,
                 data.Windows.GetValueOrDefault("seven_day")?.Utilization,
                 data.Windows.Count);
+        }
+        catch (UsageSourcesUnavailableException ex)
+        {
+            _currentInterval = 30;
+            _state.SetBackoff(new BackoffInfo(ConnectivityState.SourcesUnavailable, 0,
+                _currentInterval, DateTimeOffset.UtcNow.AddSeconds(_currentInterval), ex.Message));
+            _pollLog.LogFailure(ex.Message);
+            await _hub.Clients.All.SendAsync("backoffUpdated", _state.Backoff, ct);
+            if (_state.Current is { } stale)
+                await _hub.Clients.All.SendAsync("usageUpdated", stale, ct);
         }
         catch (DeadLoginException)
         {
@@ -216,6 +242,7 @@ public sealed class UsagePoller : BackgroundService
     // Schedule: failure 1 → 180s, 2 → 360s, 3 → 720s, 4 → 1440s, 5+ → 1800s.
     private async Task ApplyBackoffAsync(ConnectivityState state, CancellationToken ct)
     {
+        _state.MarkStale();
         _failureCount++;
         _currentInterval = (int)Math.Min(
             BaseIntervalSec * Math.Pow(2, _failureCount - 1),

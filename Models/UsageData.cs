@@ -27,6 +27,7 @@ public enum ConnectivityState
     RateLimited,
     AuthError,
     SignedOut,
+    SourcesUnavailable,
 }
 
 // Active backoff/waiting state pushed to the UI while polling is not LIVE. State drives the calm
@@ -35,7 +36,8 @@ public record BackoffInfo(
     ConnectivityState State,
     int ConsecutiveFailures,
     int IntervalSeconds,
-    DateTimeOffset NextAttemptAt);
+    DateTimeOffset NextAttemptAt,
+    string? Detail = null);
 
 public record ExtraUsageData(
     double MonthlyLimit,   // display value (raw / 100)
@@ -55,4 +57,5 @@ public record UsageData(
     IReadOnlyDictionary<string, UsageWindow?> Windows,
     ExtraUsageData? ExtraUsage,
     DateTimeOffset FetchedAt,
-    bool IsStale = false);
+    bool IsStale = false,
+    string? Source = null);

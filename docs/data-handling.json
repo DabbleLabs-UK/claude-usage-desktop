@@ -1,0 +1,17 @@
+{
+  "_comment": "Technical data-handling inventory. This file does not publish or approve legal policy wording.",
+  "application": "Claude Usage Desktop",
+  "local_credentials": "Reads the signed-in user's Claude and Codex credentials locally. Existing optional Claude login refresh may contact Anthropic or invoke the Claude CLI. Credentials are never included in usage relay responses or browser settings responses.",
+  "stored_usage": "Stores usage windows, reset times, billing summary, timestamps and the configured source label in local usage history. Diagnostic logs record source failures without relay access keys.",
+  "optional_relay": {
+    "default": "Disabled unless explicitly started/configured",
+    "transport": "Authenticated HTTP on the user's trusted private LAN; HTTP is not encrypted. No automatic cloud upload or public port forwarding.",
+    "sent": ["Usage percentages", "Reset times", "Billing summary and currency", "Original fetch timestamp", "Stale flag"],
+    "never_sent": ["Claude credentials", "Refresh tokens", "Prompts", "Model responses", "Terminal history"],
+    "authentication": "Separate relay access key, stored in a user-restricted token file on the host and local settings on the viewer. Browser settings responses omit secret values.",
+    "polling": "One background usage poll every three minutes on the relay host. Viewers read the cached snapshot; failed polls invalidate it until recovery.",
+    "startup": "Opt-in Windows task runs under the signed-in Claude user and restarts after process failure. Removing the task preserves local files."
+  },
+  "lan_viewing": "The existing optional phone/browser UI serves usage and source labels on the user's LAN.",
+  "launcher_spend": "Reads the existing locally synchronized Agents & Inference summary; this change adds no new external spend destination."
+}

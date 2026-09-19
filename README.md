@@ -64,8 +64,9 @@ cloud service, or credential copying is involved.
    local file paths.
 3. Allow TCP port 5055 through the relay PC's firewall only for the private LAN
    you trust.
-4. On the viewing PC, add this to `%APPDATA%\ClaudeUsage\settings.json` while
-   the app is closed (substitute the relay PC's LAN name or IP):
+4. On the viewing PC, add this to `%APPDATA%\ClaudeUsage\settings.json`
+   (substitute the relay PC's LAN name or IP). Changes load on the next poll,
+   or immediately using the warning banner's Retry now button:
 
    ```json
    {
@@ -82,6 +83,42 @@ cloud service, or credential copying is involved.
    Existing settings may remain in the file. Claude Usage prefers the freshest
    authenticated relay snapshot. If no relay is healthy, it falls back to the
    local Claude Code login exactly as before.
+
+The app identifies the computer providing the current reading. If all sources
+fail, it keeps the last reading dimmed and describes each remote connection
+failure. It retries every 30 seconds, without claiming that a remote login has
+expired based on this PC's credentials. Only configure sources using the same
+Claude account; snapshots are selected, never added together.
+
+HTTP relays are for a trusted private LAN: their traffic is not encrypted. Do
+not forward the relay port to the public internet. The host polls Claude once
+every three minutes and serves a cached result to all viewers. A failed host
+poll, stale snapshot, or future-dated timestamp cannot be displayed as live.
+
+### Relay startup without an open terminal
+
+The package includes `tools/install-relay-startup.ps1`. Run it as the Windows
+user who uses Claude Code (replace the executable path):
+
+```bash
+powershell.exe -NoProfile -File ./tools/install-relay-startup.ps1 -ExecutablePath 'C:\Apps\ClaudeUsage\ClaudeUsage.exe'
+```
+
+This creates a Windows login task called `Claude Usage Relay`, starts it now,
+and configures automatic restart after failure. The app runs silently without
+an open terminal. It starts after that user signs into Windows, not before.
+The script creates a user-restricted token file and prints its path; copy that
+file's value into the viewing PC's `accessToken` setting. To keep an existing
+pairing, supply `-TokenFile` pointing to a file containing its existing relay
+key. Stop a previously manually launched relay before starting the task, so
+both do not try to bind the same port.
+
+Use the same script with `-Remove -ExecutablePath '<existing exe path>'` to
+stop the task and remove its startup registration; files are preserved.
+
+The browser settings API omits Claude and relay secrets. Relay addresses and
+keys remain editable only in the local settings file. The data inventory is
+documented in `docs/data-handling.json`.
 
 ---
 

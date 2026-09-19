@@ -10,9 +10,17 @@ public sealed class UsageState
     public UsageData?   Current => _current;
     public BackoffInfo? Backoff  => _backoff;
 
-    public void Update(UsageData data) => _current = data;
+    public void Update(UsageData data)
+    {
+        if (!data.IsStale) _backoff = null;
+        _current = data;
+    }
 
-    public void SetBackoff(BackoffInfo? info) => _backoff = info;
+    public void SetBackoff(BackoffInfo? info)
+    {
+        if (info is not null) MarkStale();
+        _backoff = info;
+    }
 
     public void MarkStale()
     {

@@ -21,7 +21,7 @@ public static class UsageRelayHost
             return 2;
         }
 
-        var settings = new SettingsService();
+        var settings = new SettingsService(manageAutostart: false);
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
         builder.Logging.ClearProviders();
@@ -30,23 +30,18 @@ public static class UsageRelayHost
         builder.Services.AddSingleton<PollLog>();
         builder.Services.AddSingleton<ClaudeCli>();
         builder.Services.AddSingleton<UsageService>();
+        builder.Services.AddSingleton<RelaySnapshotStore>();
+        builder.Services.AddHostedService<RelaySnapshotPoller>();
 
-        var app = builder.Build();
-        app.MapGet("/v1/usage", async (HttpRequest request, UsageService usage) =>
+        await using var app = builder.Build();
+        app.MapGet("/v1/usage", (HttpRequest request, RelaySnapshotStore store) =>
         {
             if (!UsageRelayAuthorization.IsAuthorized(request.Headers["X-Claude-Usage-Relay-Token"].ToString(), accessToken))
                 return Results.Unauthorized();
 
-            try
-            {
-                var data = await usage.FetchAsync();
-                return Results.Ok(data with { IsStale = false });
-            }
-            catch (Exception)
-            {
-                // Never return internal exception details: they can reveal local paths or auth state.
-                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
-            }
+            request.HttpContext.Response.Headers.CacheControl = "no-store";
+            var data = store.Read(DateTimeOffset.UtcNow);
+            return data is not null ? Results.Ok(data) : Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         });
 
         await app.StartAsync(ct);

@@ -22,7 +22,7 @@ public sealed class SettingsService
 
     private AppSettings _current;
 
-    public SettingsService()
+    public SettingsService(bool manageAutostart = true)
     {
         _current = Load();
 
@@ -31,13 +31,28 @@ public sealed class SettingsService
         // folder), a normal launch should be enough to restore it -- the user already told us they
         // want it, they shouldn't have to re-toggle the setting in Settings just to notice it
         // silently stopped working or still points at a copy that no longer exists.
-        if (_current.StartWithWindows && !AutostartPointsAtCurrentExe())
+        if (manageAutostart && _current.StartWithWindows && !AutostartPointsAtCurrentExe())
         {
             ApplyAutostart(true);
         }
     }
 
     public AppSettings Current => _current;
+
+    // External edits are adopted on the next poll. A partial/invalid edit must never erase the
+    // last working configuration, and reading relay settings must not change GUI startup entries.
+    public void Reload()
+    {
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_filePath), _json);
+            if (parsed is not null) _current = parsed;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+    }
+
+    public AppSettings PublicSettings() => SettingsPrivacy.Redact(
+        Current with { StartWithWindows = GetActualAutostart() });
 
     public bool GetActualAutostart()
     {
@@ -59,9 +74,11 @@ public sealed class SettingsService
 
     public void Save(AppSettings settings)
     {
-        _current = settings;
         Directory.CreateDirectory(_dataDir);
-        File.WriteAllText(_filePath, JsonSerializer.Serialize(settings, _json));
+        var pending = _filePath + ".tmp";
+        File.WriteAllText(pending, JsonSerializer.Serialize(settings, _json));
+        File.Move(pending, _filePath, overwrite: true);
+        _current = settings;
         ApplyAutostart(settings.StartWithWindows);
     }
 
