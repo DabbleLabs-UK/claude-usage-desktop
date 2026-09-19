@@ -114,7 +114,7 @@ public sealed class UsagePoller : BackgroundService
             _log.Append(data);
 
             // Clear backoff on success
-            if (_failureCount > 0)
+            if (UsageRecoveryPolicy.ShouldClearBackoff(_failureCount, _state.Backoff))
             {
                 _failureCount    = 0;
                 _currentInterval = BaseIntervalSec;
