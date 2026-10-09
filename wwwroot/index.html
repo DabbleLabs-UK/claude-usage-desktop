@@ -187,6 +187,8 @@
 
     .card-head {
       display: flex;
+      flex-wrap: wrap;
+      gap: 2px 8px;
       justify-content: space-between;
       align-items: baseline;
       margin-bottom: 5px;
@@ -671,8 +673,23 @@
       text-decoration: underline;
       text-underline-offset: 2px;
       opacity: 0.85;
+      background: none;
+      border: 0;
+      font-family: inherit;
     }
+    .untracked-toggle[hidden] { display: none; }
     .untracked-toggle:hover { opacity: 1; }
+    .usage-info {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0 12px;
+      padding: 2px 12px;
+      flex-shrink: 0;
+    }
+    .usage-info[hidden] { display: none; }
+    .usage-info .backoff-stale-info { margin-top: 0; }
 
     .billing {
       background: var(--surface);
@@ -683,12 +700,15 @@
 
     .billing-row {
       display: flex;
+      flex-wrap: wrap;
+      gap: 2px 8px;
       justify-content: space-between;
       align-items: center;
       margin-bottom: 8px;
     }
 
     .billing .label { margin: 0; }
+    .billing-row:last-child { margin-bottom: 0; }
 
     .billing-amount {
       font-size: 0.82rem;
@@ -1257,7 +1277,10 @@
   <div class="backoff-stale-info hidden" id="backoffStaleInfo"></div>
 </div>
 
-<div id="usageSource" class="backoff-stale-info" style="padding: 4px 20px" aria-live="polite"></div>
+<div id="usageInfo" class="usage-info" hidden>
+  <span id="usageSource" class="backoff-stale-info" aria-live="polite"></span>
+  <button id="untrackedToggle" class="untracked-toggle" type="button" onclick="toggleUntracked()" hidden></button>
+</div>
 <link rel="stylesheet" href="card-layout.css">
 <main id="mainView">
   <div id="layoutStatus" role="status" aria-live="polite"></div>
@@ -1820,7 +1843,10 @@
   // windowResetState) -- re-bases the projection to the reset moment (effectiveWindowMs) so the
   // spare-ratio/projection reflect usage-since-reset instead of understating the burn rate, and
   // swaps the zero-usage message for honest context while usage is still ~0.
-  function card(label, w, windowMs, compactLabel, clickable = true, resetDetected = false, resetAnchorAt = null) {
+  function card(label, w, windowMs, compactLabel, clickable = true, resetDetected = false, resetAnchorAt = null, provider = '') {
+    // Keep detail keys unchanged; only the visible dashboard heading gains its provider.
+    const heading = text => provider && !text.toLowerCase().startsWith(provider.toLowerCase() + ' ')
+      ? provider + ' ' + text : text;
     const clickAttr = (clickable && w)
       ? ' onclick="openDetail(this.dataset.card)" data-card="' + label + '" style="cursor:pointer"'
       : '';
@@ -1828,7 +1854,7 @@
     if (!w) return (
       '<div class="card dim">'
       + '<div class="card-head">'
-      + '<span class="label">' + label + '</span>'
+      + '<span class="label">' + heading(label) + '</span>'
       + '<span class="pct" style="color:var(--muted)">--</span>'
       + '</div>'
       + '<div class="bar-row"><div class="track"><div class="fill" style="width:0%;background:var(--border)"></div></div>'
@@ -1922,7 +1948,7 @@
         '<div class="card"' + clickAttr + '>'
         // Head: short label left, countdown right
         + '<div class="card-head">'
-        + '<span class="label">' + (compactLabel || label) + '</span>'
+        + '<span class="label">' + heading(compactLabel || label) + '</span>'
         + '<span class="countdown" data-resets-at="' + w.resetsAt + '" data-window-ms="' + projWindowMs + '">' + timeUntilSec(w.resetsAt) + countdownPct + '</span>'
         + '</div>'
         // In the detail view (!clickable) each bar gets its own wrapper + caption so the
@@ -1992,7 +2018,7 @@
     return (
       '<div class="card"' + clickAttr + '>'
       + '<div class="card-head">'
-      + '<span class="label">' + label + '</span>'
+      + '<span class="label">' + heading(label) + '</span>'
       + countdown
       + '</div>'
       + '<div class="bar-row"><div class="track">'
@@ -2005,7 +2031,7 @@
     if (!eu) return (
       '<div class="billing">'
       + '<div class="billing-row">'
-      + '<span class="label">Monthly billing</span>'
+      + '<span class="label">Claude Monthly Billing</span>'
       + '<span class="billing-amount" style="color:var(--muted)">Not enabled</span>'
       + '</div>'
       + '</div>');
@@ -2015,7 +2041,7 @@
     return (
       '<div class="billing">'
       + '<div class="billing-row">'
-      + '<span class="label">Monthly billing</span>'
+      + '<span class="label">Claude Monthly Billing</span>'
       + '<span class="billing-amount">' + sym + eu.usedCredits.toFixed(2) + ' / ' + sym + eu.monthlyLimit.toFixed(0) + '</span>'
       + '</div>'
       + '<div class="track"><div class="fill" style="width:' + barW + '%;background:' + barRed(color(pct)) + '"></div></div>'
@@ -2138,7 +2164,7 @@
       + '<button type="button" data-move="left" aria-label="Move card left" title="Move left">&#8592;</button>'
       + '<button type="button" data-move="right" aria-label="Move card right" title="Move right">&#8594;</button>'
       + '<button type="button" data-move="down" aria-label="Move card down" title="Move down">&#8595;</button></div>'
-      + '<div class="provider-label">' + provider + '</div>' + content + '</article>';
+      + content + '</article>';
   }
 
   function renderCodex() {
@@ -2155,9 +2181,6 @@
     col.classList.remove('hidden');
 
     let html = '';
-    // Panel header: the label is CODEX, never "ChatGPT" -- it measures Codex agentic usage, not
-    // ChatGPT chat message caps.
-    html += '<div class="panel-head"><span class="panel-title">Codex</span></div>';
 
     // Codex's own banner (auth/connectivity), independent of the Claude backoff banner.
     const b = _codexBannerText(st);
@@ -2178,7 +2201,7 @@
       if (_codexCardDataMap[key]) key += ' (' + w.limitWindowSeconds + 's)';
       _codexCardDataMap[key] = { label: key, w: cw, windowMs, resetDetected: false, resetAnchorAt: null };
       html += dashboardCard('codex:' + w.limitWindowSeconds + ':' + windows.filter(x => x.limitWindowSeconds === w.limitWindowSeconds).indexOf(w), 'Codex',
-        card(key, cw, windowMs || null, compact, true, false, null), !!(data.isStale || st !== 'live'));
+        card(key, cw, windowMs || null, compact, true, false, null, 'Codex'), !!(data.isStale || st !== 'live'));
     }
     if (!windows.length && st === 'live')
       html += '<div class="card dim"><div class="reset">No Codex usage reported yet this period.</div></div>';
@@ -2432,10 +2455,21 @@
     }).catch(function() {});
   };
 
+  function renderUsageInfo(data, hiddenUntracked, untrackedShown) {
+    const source = document.getElementById('usageSource');
+    const toggle = document.getElementById('untrackedToggle');
+    source.textContent = data && data.source
+      ? (data.isStale ? 'Last reading from: ' : 'Usage from: ') + data.source : '';
+    toggle.textContent = hiddenUntracked > 0
+      ? 'Show ' + hiddenUntracked + ' window' + (hiddenUntracked === 1 ? '' : 's') + ' not tracked this period'
+      : untrackedShown > 0 ? 'Hide untracked windows' : '';
+    toggle.hidden = !toggle.textContent;
+    toggle.setAttribute('aria-expanded', String(untrackedShown > 0));
+    document.getElementById('usageInfo').hidden = !source.textContent && toggle.hidden;
+  }
+
   function render(data) {
     lastData = data;
-    document.getElementById('usageSource').textContent = data && data.source
-      ? (data.isStale ? 'Last reading from: ' : 'Usage from: ') + data.source : '';
     // Remember the last payload that carries real windows as the fallback to show (dimmed)
     // during backoff. Fresh (non-stale) data always wins; a stale payload is accepted only
     // when we have nothing better yet -- e.g. the last-known sample seeded on relaunch, so
@@ -2452,8 +2486,7 @@
     // server-observed fetch time, not client Date.now(), keeps the anchor consistent regardless of
     // when the browser happens to render it.
     const sampleTime = data && data.fetchedAt ? new Date(data.fetchedAt).getTime() : null;
-    // Panel header: mirrors the Codex lane's heading so the two sections read as one system.
-    let html = '<div class="panel-head"><span class="panel-title">Claude</span></div>';
+    let html = '';
 
     // Dismissible hint cards render at the top of the home view (re-emitted on every render
     // since render() rebuilds mainView wholesale; dismissed-state lives in _dismissedHints).
@@ -2479,7 +2512,7 @@
       const windowMs = deriveWindowMs(key);
       const { resetDetected, resetAnchorAt } = windowResetState(key, w, isNewSample, sampleTime);
       _cardDataMap[label] = { label, w, windowMs, resetDetected, resetAnchorAt };
-      html += dashboardCard('claude:' + key, 'Claude', card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt));
+      html += dashboardCard('claude:' + key, 'Claude', card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt, 'Claude'));
     }
 
     // 2. Any other window that is currently non-null (new models/windows). Unknown
@@ -2492,19 +2525,13 @@
       const windowMs = deriveWindowMs(key);
       const { resetDetected, resetAnchorAt } = windowResetState(key, w, isNewSample, sampleTime);
       _cardDataMap[label] = { label, w, windowMs, resetDetected, resetAnchorAt };
-      html += dashboardCard('claude:' + key, 'Claude', card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt));
+      html += dashboardCard('claude:' + key, 'Claude', card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt, 'Claude'));
     }
 
-    // 2b. Reveal / hide affordance for untracked windows (choice persisted in settings).
-    if (hiddenUntracked > 0) {
-      html += '<div class="untracked-toggle" onclick="toggleUntracked()">Show ' + hiddenUntracked
-            + ' window' + (hiddenUntracked === 1 ? '' : 's') + ' not tracked this period</div>';
-    } else if (_showUntracked) {
-      const untrackedShown = WINDOW_ORDER.filter(k =>
-        !windows[k] && !(k === 'five_hour' && windows['session'])).length;
-      if (untrackedShown > 0)
-        html += '<div class="untracked-toggle" onclick="toggleUntracked()">Hide untracked windows</div>';
-    }
+    // Keep the reveal control next to the usage source, outside the card grid.
+    const untrackedShown = _showUntracked ? WINDOW_ORDER.filter(k =>
+      !windows[k] && !(k === 'five_hour' && windows['session'])).length : 0;
+    renderUsageInfo(data, hiddenUntracked, untrackedShown);
 
     // 3. Billing card last (below the fold).
     html += dashboardCard('claude:billing', 'Claude', billingCard(data.extraUsage));
