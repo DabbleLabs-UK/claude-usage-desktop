@@ -16,12 +16,43 @@
     full.splice(from, 1); full.splice(to, 0, id);
     return full;
   }
+  // Arrow moves exchange grid cells without shifting the other column or hidden cards.
+  function swap(order, available, id, target) {
+    const saved = normalize(order);
+    const full = saved.concat(available.filter(key => !saved.includes(key)));
+    if (id === target || !available.includes(id) || !available.includes(target)) return full;
+    const from = full.indexOf(id), to = full.indexOf(target);
+    [full[from], full[to]] = [full[to], full[from]];
+    return full;
+  }
+  function neighbour(index, count, columns, direction) {
+    if (index < 0 || index >= count || columns < 1) return -1;
+    const column = index % columns;
+    const offset = { up: -columns, down: columns, left: -1, right: 1 }[direction];
+    if (offset === undefined || (direction === 'left' && column === 0)
+        || (direction === 'right' && column === columns - 1)) return -1;
+    const target = index + offset;
+    return target >= 0 && target < count ? target : -1;
+  }
   function attach(board, toggle, status) {
     let order = [], editing = false, dragging = null, dirty = false, saving = false, loaded = false;
     const sources = new Map([['claude', []], ['codex', []], ['launcher', []]]);
     const cards = () => [...sources.values()].flatMap(nodes => nodes.filter(n => n.dataset.layoutId));
     const ids = () => cards().map(n => n.dataset.layoutId);
     const report = text => { status.textContent = text; };
+    const columns = () => Math.max(1, window.getComputedStyle(board).gridTemplateColumns.split(/\s+/).filter(Boolean).length);
+    function updateDirections() {
+      const ordered = resolve(order, ids()), width = columns();
+      for (const node of cards()) {
+        for (const direction of ['up', 'down', 'left', 'right']) {
+          const button = node.querySelector('[data-move="' + direction + '"]');
+          const unavailable = neighbour(ordered.indexOf(node.dataset.layoutId), ordered.length, width, direction) < 0;
+          button.disabled = unavailable;
+          button.hidden = unavailable;
+          if (unavailable && document.activeElement === button) node.querySelector('.drag-handle').focus({ preventScroll: true });
+        }
+      }
+    }
     function render() {
       if (dragging) return;
       // Rebuilding the list briefly removes its height. Preserve the scroll viewport rather
@@ -40,14 +71,12 @@
       for (const node of notices) board.appendChild(node);
       for (const id of ordered) {
         const node = cards().find(n => n.dataset.layoutId === id);
-        const index = ordered.indexOf(id);
         const controls = node.querySelector('.position-controls');
         controls.hidden = !editing;
-        controls.querySelector('[data-move="up"]').disabled = index === 0;
-        controls.querySelector('[data-move="down"]').disabled = index === ordered.length - 1;
         board.appendChild(node);
       }
       board.classList.toggle('arranging', editing);
+      updateDirections();
       if (focusId) {
         const replacement = cards().find(n => n.dataset.layoutId === focusId);
         const selector = direction ? '[data-move="' + direction + '"]' : wasHandle ? '.drag-handle' : null;
@@ -75,8 +104,8 @@
       saving = false;
       if (dirty) save();
     }
-    function reposition(id, target, direction) {
-      order = move(order, ids(), id, target);
+    function reposition(id, target, direction, exchange = false) {
+      order = (exchange ? swap : move)(order, ids(), id, target);
       dirty = true; render();
       const node = cards().find(n => n.dataset.layoutId === id);
       const button = node && node.querySelector('[data-move="' + direction + '"]');
@@ -101,8 +130,8 @@
       if (!button || button.disabled) return;
       const id = button.closest('[data-layout-id]').dataset.layoutId;
       const ordered = resolve(order, ids());
-      const target = ordered[ordered.indexOf(id) + (button.dataset.move === 'up' ? -1 : 1)];
-      if (target) reposition(id, target, button.dataset.move);
+      const target = ordered[neighbour(ordered.indexOf(id), ordered.length, columns(), button.dataset.move)];
+      if (target) reposition(id, target, button.dataset.move, true);
     }, true);
     board.addEventListener('dragstart', event => {
       if (!editing || !event.target.closest('.drag-handle')) { event.preventDefault(); return; }
@@ -132,7 +161,7 @@
       toggle.querySelector('span').hidden = !editing;
       document.body.classList.toggle('editing-layout', editing);
       if (editing) document.querySelector('.toolbar').classList.remove('toolbar-hidden');
-      report(editing ? 'Drag a handle or use the arrows. Positions save automatically.' : '');
+      report(editing ? 'Arrows swap neighbouring cards. Drag to reorder. Positions save automatically.' : '');
       render();
     });
     async function load() {
@@ -144,10 +173,13 @@
       } catch (_) { report('Saved positions unavailable. Reconnect to rearrange.'); }
     }
     load();
+    window.addEventListener('resize', updateDirections);
+    // Also follow container resizing without changing the dashboard's normal grid.
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(updateDirections).observe(board);
     window.addEventListener('online', () => { if (dirty) save(); else load(); });
     return { update(source, container) { sources.set(source, Array.from(container.children)); render(); }, refresh: load };
   }
-  const api = { normalize, resolve, move, attach };
+  const api = { normalize, resolve, move, swap, neighbour, attach };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CardLayout = api;
 })(typeof window !== 'undefined' ? window : globalThis);

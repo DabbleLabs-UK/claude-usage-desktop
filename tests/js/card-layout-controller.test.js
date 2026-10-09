@@ -81,16 +81,19 @@ function card(id) {
   controls.appendChild(new Node('button', {}, ['drag-handle']));
   controls.appendChild(new Node('button', { move: 'up' }));
   controls.appendChild(new Node('button', { move: 'down' }));
+  controls.appendChild(new Node('button', { move: 'left' }));
+  controls.appendChild(new Node('button', { move: 'right' }));
   return node;
 }
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
-function setup(saved) {
+function setup(saved, columns = 1) {
   const body = new Node('body');
   global.document = { body, activeElement: body, querySelector: selector => body.querySelector(selector) };
   global.window = new Node('window');
+  window.getComputedStyle = () => ({ gridTemplateColumns: Array(columns).fill('200px').join(' ') });
   const toolbar = body.appendChild(new Node('div', {}, ['toolbar', 'toolbar-hidden']));
   toolbar.bounds = { top: 550, bottom: 600 };
   const toggle = toolbar.appendChild(new Node('button'));
@@ -113,6 +116,7 @@ function setup(saved) {
   const controller = layout.attach(board, toggle, status);
   return {
     board, toggle, status, controller, posts,
+    resize: count => { columns = count; window.emit('resize'); },
     respond: callback => { respond = callback; },
     gets: () => gets,
     order: () => board.children.filter(node => node.dataset.layoutId).map(node => node.dataset.layoutId),
@@ -220,9 +224,9 @@ async function test(name, fn) {
     env.update('codex', []);
     assert.deepEqual(env.order(), ['claude:week', 'claude:five']);
     env.toggle.emit('click'); env.arrow('claude:five', 'up'); await settle();
-    assert.deepEqual(env.posts[0], ['claude:five', 'claude:week', 'codex:credits', 'codex:week']);
+    assert.deepEqual(env.posts[0], ['claude:five', 'codex:credits', 'claude:week', 'codex:week']);
     env.update('codex', ['codex:week', 'codex:credits']);
-    assert.deepEqual(env.order(), ['claude:five', 'claude:week', 'codex:credits', 'codex:week']);
+    assert.deepEqual(env.order(), ['claude:five', 'codex:credits', 'claude:week', 'codex:week']);
   });
 
   await test('focus moves to the handle when a source change disables the focused arrow', async () => {
@@ -232,7 +236,7 @@ async function test(name, fn) {
     assert.equal(document.activeElement, env.current('b').querySelector('.drag-handle'));
   });
 
-  await test('portrait arrows preserve the viewport and move exactly one visible neighbour', async () => {
+  await test('single-column arrows preserve the viewport and move exactly one visible neighbour', async () => {
     const env = setup(['a', 'b', 'c']); env.update('claude', ['a', 'b', 'c']); await settle();
     env.toggle.emit('click'); document.body.scrollTop = 320;
     env.arrow('b', 'up'); await settle();
@@ -258,8 +262,62 @@ async function test(name, fn) {
     assert.equal(document.body.scrollTop, 194);
   });
 
+  await test('two-column arrows swap only the neighbour in the requested direction', async () => {
+    const env = setup(['a', 'b', 'c', 'd', 'e', 'f'], 2);
+    env.update('claude', ['a', 'b', 'c', 'd', 'e', 'f']); await settle();
+    env.toggle.emit('click');
+    env.arrow('a', 'down'); await settle();
+    assert.deepEqual(env.order(), ['c', 'b', 'a', 'd', 'e', 'f']);
+    env.arrow('a', 'right'); await settle();
+    assert.deepEqual(env.order(), ['c', 'b', 'd', 'a', 'e', 'f']);
+    env.arrow('a', 'up'); await settle();
+    assert.deepEqual(env.order(), ['c', 'a', 'd', 'b', 'e', 'f']);
+    env.arrow('a', 'left'); await settle();
+    assert.deepEqual(env.order(), ['a', 'c', 'd', 'b', 'e', 'f']);
+    assert.deepEqual(env.posts.at(-1), env.order());
+  });
+
+  await test('grid edges and the incomplete last row hide unavailable directions', async () => {
+    const env = setup(['a', 'b', 'c', 'd', 'e'], 2);
+    env.update('claude', ['a', 'b', 'c', 'd', 'e']); await settle();
+    env.toggle.emit('click');
+    const expected = { a: ['down', 'right'], b: ['down', 'left'], c: ['up', 'down', 'right'], d: ['up', 'left'], e: ['up'] };
+    for (const [id, available] of Object.entries(expected)) {
+      for (const direction of ['up', 'down', 'left', 'right']) {
+        const button = env.current(id).querySelector('[data-move="' + direction + '"]');
+        assert.equal(button.hidden, !available.includes(direction), id + ' ' + direction);
+        assert.equal(button.disabled, button.hidden);
+        if (button.hidden) env.arrow(id, direction);
+      }
+    }
+    assert.equal(env.posts.length, 0);
+    assert.deepEqual(env.order(), ['a', 'b', 'c', 'd', 'e']);
+  });
+
+  await test('resizing updates directions and focus without changing order or saving', async () => {
+    const env = setup(['a', 'b', 'c', 'd'], 2);
+    env.update('claude', ['a', 'b', 'c', 'd']); await settle();
+    env.toggle.emit('click');
+    env.current('a').querySelector('[data-move="right"]').focus();
+    env.resize(1);
+    assert.equal(document.activeElement, env.current('a').querySelector('.drag-handle'));
+    for (const id of env.order()) {
+      assert.equal(env.current(id).querySelector('[data-move="left"]').hidden, true);
+      assert.equal(env.current(id).querySelector('[data-move="right"]').hidden, true);
+    }
+    assert.equal(env.current('b').querySelector('[data-move="up"]').hidden, false);
+    env.resize(2);
+    assert.equal(env.current('b').querySelector('[data-move="up"]').hidden, true);
+    assert.equal(env.current('b').querySelector('[data-move="left"]').hidden, false);
+    assert.deepEqual(env.order(), ['a', 'b', 'c', 'd']);
+    assert.equal(env.posts.length, 0);
+    env.toggle.emit('click');
+    assert.deepEqual(env.order(), ['a', 'b', 'c', 'd']);
+  });
+
   const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../wwwroot/card-layout.css'), 'utf8');
-  assert.match(css, /#dashboardCards\.arranging\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.doesNotMatch(css, /(?:\.arranging|\.editing-layout)[^{]*\{[^}]*grid-template-columns/);
+  assert.match(css, /\.position-controls button\[hidden\]\s*\{\s*display:\s*none/);
   assert.match(css, /\.editing-layout #mainView\s*\{\s*overflow-anchor:\s*none/);
   delete global.document; delete global.window; delete global.fetch;
   if (failures) process.exitCode = 1;

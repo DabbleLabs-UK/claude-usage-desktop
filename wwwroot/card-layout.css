@@ -2,17 +2,19 @@
 #mainView > .usage-col { display: none !important; }
 #dashboardCards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: start; }
 @media (min-width: 680px) { #dashboardCards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-/* Arrow movement always follows one visible vertical sequence, even in desktop-site mode. */
-#dashboardCards.arranging { grid-template-columns: minmax(0, 1fr); }
 .editing-layout #mainView { overflow-anchor: none; }
 .editing-layout #layoutStatus { min-height: 2.8em; }
 .dashboard-card { min-width: 0; }
 .provider-label { color: var(--dim); font-size: 0.65rem; font-weight: 700; text-transform: uppercase; padding: 2px 3px 4px; }
-.position-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 5px; }
+.position-controls { display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); justify-content: center; gap: 2px; margin-bottom: 5px; }
 .position-controls[hidden] { display: none; }
 .position-controls button { min-width: 44px; min-height: 44px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); cursor: pointer; }
-.position-controls button:disabled { opacity: 0.35; cursor: default; }
-.position-controls .drag-handle { cursor: grab; margin-right: auto; }
+.position-controls button[hidden] { display: none; }
+.position-controls [data-move="up"] { grid-area: 1 / 2; }
+.position-controls [data-move="left"] { grid-area: 2 / 1; }
+.position-controls [data-move="right"] { grid-area: 2 / 3; }
+.position-controls [data-move="down"] { grid-area: 3 / 2; }
+.position-controls .drag-handle { cursor: grab; grid-area: 2 / 2; }
 .position-controls button:focus-visible, #rearrangeBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .arranging .dashboard-card { outline: 1px dashed var(--accent); border-radius: 11px; padding: 5px; }
 .arranging .dashboard-card .card, .arranging .dashboard-card .billing { cursor: default !important; }

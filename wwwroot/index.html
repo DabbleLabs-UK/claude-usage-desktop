@@ -2133,9 +2133,11 @@
     const safeId = String(id).replace(/[^a-zA-Z0-9:_-]/g, '_');
     return '<article class="dashboard-card' + (stale ? ' codex-stale' : '') + '" data-layout-id="' + safeId + '" data-provider="' + provider + '">'
       + '<div class="position-controls" hidden>'
-      + '<button type="button" class="drag-handle" draggable="true" aria-label="Drag card; alternatively use move up or down" title="Drag to move">&#8942;&#8942;</button>'
-      + '<button type="button" data-move="up" aria-label="Move card up" title="Move up">&#8593; Up</button>'
-      + '<button type="button" data-move="down" aria-label="Move card down" title="Move down">&#8595; Down</button></div>'
+      + '<button type="button" class="drag-handle" draggable="true" aria-label="Drag card; alternatively use directional arrows" title="Drag to move">&#8942;&#8942;</button>'
+      + '<button type="button" data-move="up" aria-label="Move card up" title="Move up">&#8593;</button>'
+      + '<button type="button" data-move="left" aria-label="Move card left" title="Move left">&#8592;</button>'
+      + '<button type="button" data-move="right" aria-label="Move card right" title="Move right">&#8594;</button>'
+      + '<button type="button" data-move="down" aria-label="Move card down" title="Move down">&#8595;</button></div>'
       + '<div class="provider-label">' + provider + '</div>' + content + '</article>';
   }
 
