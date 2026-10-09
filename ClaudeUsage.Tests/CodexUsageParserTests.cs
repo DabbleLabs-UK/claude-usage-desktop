@@ -80,7 +80,7 @@ public class CodexUsageParserTests
     }
 
     [Fact]
-    public void CreditsBalance_SurfacedOnlyWhenHasCreditsTrue()
+    public void CreditsBalance_SurfacedWhenPresent()
     {
         var body = """
         {
@@ -95,7 +95,7 @@ public class CodexUsageParserTests
     }
 
     [Fact]
-    public void CreditsBalance_NullWhenHasCreditsFalse_EvenIfBalancePresent()
+    public void CreditsBalance_PreservedWhenHasCreditsFalse()
     {
         var body = """
         {
@@ -106,7 +106,36 @@ public class CodexUsageParserTests
 
         var result = CodexUsageParser.Parse(body, Now);
 
+        Assert.Equal(99, result.CreditsBalance);
+    }
+
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("\"0\"", 0)]
+    [InlineData("\"62500.5\"", 62500.5)]
+    public void CreditsBalance_AcceptsNumericStringsAndExhaustedZero(string raw, double expected)
+    {
+        var result = CodexUsageParser.Parse("{\"credits\":{\"has_credits\":false,\"balance\":" + raw + "}}", Now);
+        Assert.Equal(expected, result.CreditsBalance);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("\"NaN\"")]
+    [InlineData("\"Infinity\"")]
+    [InlineData("1e999")]
+    [InlineData("null")]
+    public void CreditsBalance_RejectsInvalidBalances(string raw)
+    {
+        var result = CodexUsageParser.Parse("{\"credits\":{\"balance\":" + raw + "}}", Now);
         Assert.Null(result.CreditsBalance);
+    }
+
+    [Fact]
+    public void UnlimitedCredits_AreExplicit()
+    {
+        var result = CodexUsageParser.Parse("""{"credits":{"unlimited":true,"balance":"100"}}""", Now);
+        Assert.True(result.CreditsUnlimited);
     }
 
     [Fact]

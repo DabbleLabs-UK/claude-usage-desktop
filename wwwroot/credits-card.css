@@ -1,0 +1,99 @@
+.credit-history-card {
+  color: var(--text);
+}
+
+.credit-history-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.credit-history-heading h2 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.credit-history-heading > strong {
+  font-size: 0.9rem;
+}
+
+.credit-history-horizons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.credit-history-horizon {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+}
+
+.credit-history-label,
+.credit-history-pace {
+  color: var(--dim);
+  font-size: 0.7rem;
+}
+
+.credit-history-chart-title {
+  font-size: 0.7rem;
+  margin-bottom: 6px;
+}
+
+.credit-history-chart {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.credit-history-day {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-width: 0;
+  text-align: center;
+  font-size: 0.65rem;
+}
+
+.credit-history-value {
+  overflow-wrap: anywhere;
+  margin-bottom: 4px;
+}
+
+.credit-history-track {
+  height: 48px;
+  display: flex;
+  align-items: flex-end;
+  background: var(--surface);
+  border-bottom: 1px solid var(--dim);
+  border-radius: 3px 3px 0 0;
+}
+
+.credit-history-fill {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 3px 3px 0 0;
+}
+
+.credit-history-date {
+  color: var(--dim);
+  margin-top: 4px;
+}
+
+.credit-history-note,
+.credit-history-freshness {
+  color: var(--dim);
+  font-size: 0.65rem;
+  line-height: 1.4;
+  margin-top: 8px;
+}
+
+.credit-history-stale .credit-history-freshness {
+  color: var(--text);
+  font-weight: 600;
+}

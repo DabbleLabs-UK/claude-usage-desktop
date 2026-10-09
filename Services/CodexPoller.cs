@@ -20,6 +20,7 @@ public sealed class CodexPoller : BackgroundService
 
     private readonly CodexUsageService _service;
     private readonly CodexUsageState _state;
+    private readonly CodexCreditHistory _creditHistory;
     private readonly PollLog _pollLog;
     private readonly IHubContext<UsageHub> _hub;
     private readonly ILogger<CodexPoller> _logger;
@@ -27,12 +28,14 @@ public sealed class CodexPoller : BackgroundService
     public CodexPoller(
         CodexUsageService service,
         CodexUsageState state,
+        CodexCreditHistory creditHistory,
         PollLog pollLog,
         IHubContext<UsageHub> hub,
         ILogger<CodexPoller> logger)
     {
         _service = service;
         _state = state;
+        _creditHistory = creditHistory;
         _pollLog = pollLog;
         _hub = hub;
         _logger = logger;
@@ -63,6 +66,7 @@ public sealed class CodexPoller : BackgroundService
             // keeps the lanes independent on the path that users actually see.
             if (result.State == CodexState.Live && result.Data is { } data)
             {
+                data = _creditHistory.Record(data, result.AccountHash);
                 _state.Update(data);
                 await _hub.Clients.All.SendAsync("codexUsageUpdated", data, ct);
                 await _hub.Clients.All.SendAsync("codexStatusUpdated", _state.Status, ct);
@@ -70,6 +74,7 @@ public sealed class CodexPoller : BackgroundService
             }
             else
             {
+                _creditHistory.MarkUnavailable();
                 // Keep the last-known snapshot (dimmed/stale) so a transient miss doesn't blank the
                 // Codex column; NoToken has no snapshot to keep and the UI hides the section.
                 _state.MarkStale();

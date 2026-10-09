@@ -40,7 +40,11 @@ public record AppSettings(
     // Optional, data-only Claude Usage relays on other machines. A relay owns its local Claude
     // login; this app receives only the already-calculated usage windows and their timestamp.
     // Empty by default, so the ordinary one-PC experience remains entirely local.
-    UsageRelaySource[]? UsageRelaySources = null);
+    UsageRelaySource[]? UsageRelaySources = null,
+    // Stable dashboard card IDs; shared by the desktop and connected LAN browsers.
+    string[]? CardOrder = null);
+
+public record CardOrderRequest(string[]? Order);
 
 // A deliberately small, portable relay configuration. The access token protects the relay's LAN
 // endpoint; it is not a Claude credential and cannot be used to make Claude requests.

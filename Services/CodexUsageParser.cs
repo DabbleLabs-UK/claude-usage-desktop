@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Globalization;
 using ClaudeUsage.Models;
 
 namespace ClaudeUsage.Services;
@@ -19,6 +20,7 @@ public static class CodexUsageParser
     {
         var windows = new List<CodexWindow>();
         double? creditsBalance = null;
+        var creditsUnlimited = false;
 
         try
         {
@@ -36,13 +38,13 @@ public static class CodexUsageParser
                     }
                 }
 
-                // credits.balance only when the plan actually has credits (has_credits == true).
+                // Preserve an explicit zero after exhaustion. Balance may be a JSON string.
                 if (root.TryGetProperty("credits", out var credits)
                     && credits.ValueKind == JsonValueKind.Object)
                 {
-                    var hasCredits = credits.TryGetProperty("has_credits", out var hc)
-                                     && hc.ValueKind == JsonValueKind.True;
-                    if (hasCredits && TryGetNum(credits, "balance", out var balance))
+                    creditsUnlimited = credits.TryGetProperty("unlimited", out var unlimited)
+                                       && unlimited.ValueKind == JsonValueKind.True;
+                    if (TryGetBalance(credits, out var balance))
                         creditsBalance = balance;
                 }
             }
@@ -55,7 +57,18 @@ public static class CodexUsageParser
         // Shortest window first (a 5-hour session lane before the weekly one) so cards read
         // naturally top-to-bottom regardless of the order the API listed the lanes in.
         windows.Sort((a, b) => a.LimitWindowSeconds.CompareTo(b.LimitWindowSeconds));
-        return new CodexUsageData(windows, creditsBalance, now);
+        return new CodexUsageData(windows, creditsBalance, now, CreditsUnlimited: creditsUnlimited);
+    }
+
+    private static bool TryGetBalance(JsonElement credits, out double balance)
+    {
+        balance = 0;
+        if (!credits.TryGetProperty("balance", out var value)) return false;
+        var parsed = value.ValueKind == JsonValueKind.Number
+            ? value.TryGetDouble(out balance)
+            : value.ValueKind == JsonValueKind.String
+              && double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out balance);
+        return parsed && double.IsFinite(balance) && balance >= 0;
     }
 
     // A lane is a "window" iff it is an object carrying a numeric used_percent AND

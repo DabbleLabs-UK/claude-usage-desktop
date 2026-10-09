@@ -11,6 +11,9 @@
   <!-- App favicon for the browser tab (served from wwwroot; works for the phone/LAN client too) -->
   <link rel="icon" type="image/x-icon" href="favicon.ico">
   <link rel="apple-touch-icon" href="logo_dabblelabs.png">
+  <link rel="stylesheet" href="credits-card.css">
+  <script src="credits-card.js"></script>
+  <script src="card-layout.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -1255,7 +1258,10 @@
 </div>
 
 <div id="usageSource" class="backoff-stale-info" style="padding: 4px 20px" aria-live="polite"></div>
+<link rel="stylesheet" href="card-layout.css">
 <main id="mainView">
+  <div id="layoutStatus" role="status" aria-live="polite"></div>
+  <div id="dashboardCards"></div>
   <!-- Two independent columns: Claude (left/top) and Codex (right/bottom). At a wide viewport
        they sit side by side; when narrow they stack. The Codex column is hidden entirely until a
        Codex login is detected. Each lane renders into its own container from its own data feed. -->
@@ -1431,6 +1437,10 @@
       <span class="reconnecting-el" id="reconnectingEl">Reconnecting&#x2026;</span>
     </div>
   </div>
+  <button class="gear-btn" id="rearrangeBtn" title="Rearrange cards" aria-label="Rearrange cards" aria-pressed="false">
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 16V3m-3 3 3-3 3 3M15 4v13m-3-3 3 3 3-3"/></svg>
+    <span hidden>Done</span>
+  </button>
   <button class="gear-btn" onclick="openStats()" title="Stats">
     <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" style="vertical-align:-2px">
       <rect x="1" y="8" width="3" height="6" rx="0.5"></rect>
@@ -2116,6 +2126,19 @@
     return null;
   }
 
+  const dashboardLayout = CardLayout.attach(document.getElementById('dashboardCards'),
+    document.getElementById('rearrangeBtn'), document.getElementById('layoutStatus'));
+
+  function dashboardCard(id, provider, content, stale = false) {
+    const safeId = String(id).replace(/[^a-zA-Z0-9:_-]/g, '_');
+    return '<article class="dashboard-card' + (stale ? ' codex-stale' : '') + '" data-layout-id="' + safeId + '" data-provider="' + provider + '">'
+      + '<div class="position-controls" hidden>'
+      + '<button type="button" class="drag-handle" draggable="true" aria-label="Drag card; alternatively use move up or down" title="Drag to move">&#8942;&#8942;</button>'
+      + '<button type="button" data-move="up" aria-label="Move card up" title="Move up">&#8593;</button>'
+      + '<button type="button" data-move="down" aria-label="Move card down" title="Move down">&#8595;</button></div>'
+      + '<div class="provider-label">' + provider + '</div>' + content + '</article>';
+  }
+
   function renderCodex() {
     const col = document.getElementById('codexCol');
     const st = _codexStatus ? _codexStatus.state : null;
@@ -2124,6 +2147,7 @@
       col.classList.add('hidden');
       col.innerHTML = '';
       _codexCardDataMap = {};
+      dashboardLayout.update('codex', col);
       return;
     }
     col.classList.remove('hidden');
@@ -2151,18 +2175,17 @@
       let key = 'Codex ' + label;
       if (_codexCardDataMap[key]) key += ' (' + w.limitWindowSeconds + 's)';
       _codexCardDataMap[key] = { label: key, w: cw, windowMs, resetDetected: false, resetAnchorAt: null };
-      html += card(key, cw, windowMs || null, compact, true, false, null);
+      html += dashboardCard('codex:' + w.limitWindowSeconds + ':' + windows.filter(x => x.limitWindowSeconds === w.limitWindowSeconds).indexOf(w), 'Codex',
+        card(key, cw, windowMs || null, compact, true, false, null), !!(data.isStale || st !== 'live'));
     }
     if (!windows.length && st === 'live')
       html += '<div class="card dim"><div class="reset">No Codex usage reported yet this period.</div></div>';
 
-    // Credits balance -- surfaced only when the plan has credits (creditsBalance present).
-    if (data && typeof data.creditsBalance === 'number') {
-      html += '<div class="codex-credits"><span class="label">Codex credits</span>'
-            + '<span class="billing-amount">' + data.creditsBalance.toFixed(2) + '</span></div>';
-    }
+    const creditCard = CreditsCard.render(data ? { ...data, isStale: data.isStale || st !== 'live' } : null);
+    if (creditCard) html += dashboardCard('codex:credits', 'Codex', creditCard, !!(data.isStale || st !== 'live'));
 
     col.innerHTML = html;
+    dashboardLayout.update('codex', col);
 
     // If a CODEX card's detail view is currently open, refresh its content from this poll --
     // otherwise the open detail would freeze at the values it had when opened. (The Claude
@@ -2259,11 +2282,13 @@
       console.log('[CU][AgentSpend] no data yet -- hiding #agentSpendCol');
       col.classList.add('hidden');
       col.innerHTML = '';
+      dashboardLayout.update('launcher', col);
       return;
     }
     col.classList.remove('hidden');
     try {
-      col.innerHTML = renderAgentSpendCard(_agentSpendData);
+      col.innerHTML = dashboardCard('launcher:spend', 'Launcher', renderAgentSpendCard(_agentSpendData));
+      dashboardLayout.update('launcher', col);
       console.log('[CU][AgentSpend] card rendered; #agentSpendCol classList =', col.className,
         'clientHeight =', col.clientHeight, 'offsetTop (within #main) =', col.offsetTop);
     } catch (e) {
@@ -2452,7 +2477,7 @@
       const windowMs = deriveWindowMs(key);
       const { resetDetected, resetAnchorAt } = windowResetState(key, w, isNewSample, sampleTime);
       _cardDataMap[label] = { label, w, windowMs, resetDetected, resetAnchorAt };
-      html += card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt);
+      html += dashboardCard('claude:' + key, 'Claude', card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt));
     }
 
     // 2. Any other window that is currently non-null (new models/windows). Unknown
@@ -2465,7 +2490,7 @@
       const windowMs = deriveWindowMs(key);
       const { resetDetected, resetAnchorAt } = windowResetState(key, w, isNewSample, sampleTime);
       _cardDataMap[label] = { label, w, windowMs, resetDetected, resetAnchorAt };
-      html += card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt);
+      html += dashboardCard('claude:' + key, 'Claude', card(label, w, windowMs, compact, true, resetDetected, resetAnchorAt));
     }
 
     // 2b. Reveal / hide affordance for untracked windows (choice persisted in settings).
@@ -2480,8 +2505,9 @@
     }
 
     // 3. Billing card last (below the fold).
-    html += billingCard(data.extraUsage);
+    html += dashboardCard('claude:billing', 'Claude', billingCard(data.extraUsage));
     document.getElementById('claudeCol').innerHTML = html;
+    dashboardLayout.update('claude', document.getElementById('claudeCol'));
 
     if (isNewSample) _lastTrackedFetchedAt = data.fetchedAt;
     _lastFetchedAt = new Date(data.fetchedAt).getTime();

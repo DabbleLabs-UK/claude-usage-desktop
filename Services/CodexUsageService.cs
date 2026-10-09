@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Text;
 using ClaudeUsage.Models;
 
 namespace ClaudeUsage.Services;
@@ -20,7 +22,8 @@ public sealed class CodexUsageService
     // separate (its timeouts / connection state can't influence Claude polling).
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
 
-    public sealed record CodexResult(CodexState State, CodexUsageData? Data, string Source, string Detail);
+    public sealed record CodexResult(CodexState State, CodexUsageData? Data, string Source, string Detail,
+        string? AccountHash = null);
 
     public async Task<CodexResult> FetchAsync()
     {
@@ -52,7 +55,9 @@ public sealed class CodexUsageService
 
             var body = await response.Content.ReadAsStringAsync();
             var data = CodexUsageParser.Parse(body, DateTimeOffset.UtcNow);
-            return new CodexResult(CodexState.Live, data, source, $"{data.Windows.Count} window(s)");
+            var accountHash = string.IsNullOrWhiteSpace(creds.AccountId) ? null
+                : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(creds.AccountId)));
+            return new CodexResult(CodexState.Live, data, source, $"{data.Windows.Count} window(s)", accountHash);
         }
         catch (HttpRequestException ex)
         {

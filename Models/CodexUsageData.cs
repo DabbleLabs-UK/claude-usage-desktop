@@ -17,13 +17,28 @@ public record CodexWindow(
 
 // A Codex usage snapshot. Fully INDEPENDENT of the Claude UsageData failure domain: it shares
 // no state, no polling and no backoff with UsageService, so a Codex auth/network/endpoint fault
-// can never degrade or stale the Claude lane (or vice versa). CreditsBalance is surfaced only
-// when the response's credits.has_credits is true.
+// can never degrade or stale the Claude lane (or vice versa).
 public record CodexUsageData(
     IReadOnlyList<CodexWindow> Windows,
     double? CreditsBalance,
     DateTimeOffset FetchedAt,
-    bool IsStale = false);
+    bool IsStale = false,
+    bool CreditsUnlimited = false,
+    CodexCreditsHistory? CreditsHistory = null);
+
+public record CodexCreditPace(
+    string Status,
+    double? CreditsSpent,
+    double? CreditsPerDay,
+    double? EstimatedDaysLeft,
+    double ObservedHours);
+
+public record CodexCreditDay(string Date, double? CreditsSpent);
+
+public record CodexCreditsHistory(
+    CodexCreditPace Last24Hours,
+    CodexCreditPace Last7Days,
+    IReadOnlyList<CodexCreditDay> Daily);
 
 // Independent connectivity/auth state for the Codex lane -- deliberately NOT the Claude
 // ConnectivityState, so the two can't be confused and a Codex problem stays contained.

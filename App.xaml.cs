@@ -500,6 +500,7 @@ public partial class App : Application
         // fault can never disturb the Claude services above.
         builder.Services.AddSingleton<CodexUsageState>();
         builder.Services.AddSingleton<CodexUsageService>();
+        builder.Services.AddSingleton<CodexCreditHistory>();
         builder.Services.AddSingleton<CodexPoller>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CodexPoller>());
 
@@ -527,6 +528,8 @@ public partial class App : Application
             {
                 var html = await File.ReadAllTextAsync(Path.Combine(wwwrootPath, "index.html"));
                 html = html.Replace("\"logo_dabblelabs.png\"", $"\"logo_dabblelabs.png?v={assetVer}\"");
+                foreach (var asset in new[] { "card-layout.js", "card-layout.css", "credits-card.js", "credits-card.css" })
+                    html = html.Replace($"\"{asset}\"", $"\"{asset}?v={assetVer}\"");
 
                 // Discriminate the embedded desktop WebView2 (loads via localhost -> loopback
                 // remote IP) from a remote LAN browser (the phone, a non-loopback IP). Server-side
@@ -628,6 +631,20 @@ public partial class App : Application
         app.MapGet("/api/settings", (SettingsService settings) =>
             Results.Ok(settings.PublicSettings()));
 
+        app.MapGet("/api/card-order", (SettingsService settings) =>
+            Results.Ok(settings.Current.CardOrder ?? Array.Empty<string>()));
+
+        app.MapPost("/api/card-order", (CardOrderRequest request, SettingsService settings) =>
+        {
+            if (request.Order is null || request.Order.Length > 200 ||
+                request.Order.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 160 ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(id, @"\A[a-zA-Z0-9:_-]+\z")))
+                return Results.BadRequest(new { message = "Invalid card order." });
+            var order = request.Order.Distinct(StringComparer.Ordinal).ToArray();
+            settings.Save(settings.Current with { CardOrder = order });
+            return Results.Ok(order);
+        });
+
         app.MapPost("/api/settings", async (HttpRequest request, SettingsService settings) =>
         {
             // Parse the raw body so we can tell which keys the client actually sent. Needed for the
@@ -669,6 +686,7 @@ public partial class App : Application
                 AutoRefreshLogin = mergedAutoRefresh,
                 ShowUntrackedWindows = mergedShowUntracked,
                 UsageRelaySources = mergedRelaySources,
+                CardOrder = settings.Current.CardOrder,
             };
             settings.Save(merged);
             return Results.Ok(settings.PublicSettings());

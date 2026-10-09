@@ -1,0 +1,10 @@
+'use strict';
+const assert = require('node:assert/strict');
+const layout = require('../../wwwroot/card-layout.js');
+assert.deepEqual(layout.normalize(['claude:week', 'claude:week', '<script>', null]), ['claude:week']);
+assert.deepEqual(layout.resolve(['codex:credits', 'missing'], ['claude:week', 'codex:credits', 'new']), ['codex:credits', 'claude:week', 'new']);
+assert.deepEqual(layout.move(['a', 'hidden', 'b', 'c'], ['a', 'b', 'c'], 'c', 'a'), ['c', 'a', 'hidden', 'b']);
+assert.deepEqual(layout.move(['a', 'b', 'c'], ['a', 'b', 'c'], 'a', 'c'), ['b', 'c', 'a']);
+assert.deepEqual(layout.resolve(['c', 'a', 'hidden', 'b'], ['a', 'hidden', 'b', 'c']), ['c', 'a', 'hidden', 'b']);
+assert.deepEqual(layout.move(['a'], ['a', 'b'], 'unknown', 'a'), ['a', 'b']);
+console.log('Card layout ordering tests passed');

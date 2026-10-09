@@ -13,5 +13,13 @@
     "startup": "Opt-in Windows task runs under the signed-in Claude user and restarts after process failure. Removing the task preserves local files."
   },
   "lan_viewing": "The existing optional phone/browser UI serves usage and source labels on the user's LAN.",
-  "launcher_spend": "Reads the existing locally synchronized Agents & Inference summary; this change adds no new external spend destination."
+  "launcher_spend": "Reads the existing locally synchronized Agents & Inference summary; this change adds no new external spend destination.",
+  "codex_credits": {
+    "source": "Uses the existing authenticated Codex usage poll; adds no external API calls or prompt collection.",
+    "storage": "Keeps at most eight days and 5000 timestamped credit-balance samples in the local usage-log/codex-credits.json file. A SHA-256 account identifier separates histories; raw account IDs and credentials are not saved in this file or sent to browsers.",
+    "derived": "Calculates approximate observed balance decreases, 24-hour and seven-day spending rates, estimated days remaining and seven completed UTC daily totals. Grants, corrections, missing observations and expiry can limit the estimates.",
+    "sharing": "The existing desktop/LAN usage response includes credit balance, calculated estimates, daily totals and freshness; no new cloud upload.",
+    "deletion": "The existing Clear data usage-logs option removes the credit history with the other usage logs."
+  },
+  "dashboard_layout": "Stores ordered card identifiers in local settings. The dedicated card-order endpoint shares the order with connected LAN browsers; no prompts, account IDs or credentials are included."
 }
