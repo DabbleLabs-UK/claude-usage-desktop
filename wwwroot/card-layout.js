@@ -24,6 +24,10 @@
     const report = text => { status.textContent = text; };
     function render() {
       if (dragging) return;
+      // Rebuilding the list briefly removes its height. Preserve the scroll viewport rather
+      // than letting the browser anchor to whichever card happens to move under the finger.
+      const viewport = board.parentNode;
+      const scrollTop = viewport.scrollTop;
       const active = document.activeElement;
       const focusedCard = active && active.closest && active.closest('[data-layout-id]');
       const focusId = focusedCard && focusedCard.dataset.layoutId;
@@ -51,6 +55,7 @@
         if (control && !control.disabled) control.focus({ preventScroll: true });
         else if (replacement && editing) replacement.querySelector('.drag-handle').focus({ preventScroll: true });
       }
+      viewport.scrollTop = scrollTop;
     }
     async function save() {
       if (saving || !dirty) return;
@@ -75,9 +80,18 @@
       dirty = true; render();
       const node = cards().find(n => n.dataset.layoutId === id);
       const button = node && node.querySelector('[data-move="' + direction + '"]');
-      if (button && !button.disabled) button.focus();
-      else if (node) node.querySelector('.drag-handle').focus();
-      if (node) node.scrollIntoView({ block: 'nearest' });
+      const control = button && !button.disabled ? button : node && node.querySelector('.drag-handle');
+      if (control) {
+        control.focus({ preventScroll: true });
+        const viewport = board.parentNode;
+        const bounds = viewport.getBoundingClientRect();
+        const toolbar = document.querySelector('.toolbar').getBoundingClientRect();
+        const rect = control.getBoundingClientRect();
+        const bottom = Math.min(bounds.bottom, toolbar.top);
+        // Scroll just enough to retain access to the control, never to fit a tall card.
+        if (rect.top < bounds.top) viewport.scrollTop -= bounds.top - rect.top;
+        else if (rect.bottom > bottom) viewport.scrollTop += rect.bottom - bottom;
+      }
       save();
     }
     board.addEventListener('click', event => {

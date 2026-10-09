@@ -17,6 +17,8 @@ class Node {
     this.hidden = false;
     this.disabled = false;
     this.textContent = '';
+    this.scrollTop = 0;
+    this.bounds = { top: 0, bottom: tag === 'button' ? 44 : 600 };
     const names = new Set(classes);
     this.classList = {
       contains: name => names.has(name),
@@ -55,7 +57,11 @@ class Node {
     this.children.push(node);
     return node;
   }
-  replaceChildren() { for (const child of this.children.slice()) this.detach(child); }
+  replaceChildren() {
+    for (const child of this.children.slice()) this.detach(child);
+    if (this.parentNode) this.parentNode.scrollTop = 0; // temporary empty-list scroll clamping
+  }
+  getBoundingClientRect() { return this.bounds; }
   setAttribute(name, value) { this.attributes[name] = value; }
   addEventListener(name, handler) { (this.listeners[name] ||= []).push(handler); }
   emit(name, target = this, extra = {}) {
@@ -65,7 +71,7 @@ class Node {
     for (const listener of this.listeners[name] || []) listener(event);
     return event;
   }
-  focus() { if (!this.disabled) document.activeElement = this; }
+  focus(options) { this.focusOptions = options; if (!this.disabled) document.activeElement = this; }
   scrollIntoView() { this.scrolled = true; }
 }
 
@@ -86,6 +92,7 @@ function setup(saved) {
   global.document = { body, activeElement: body, querySelector: selector => body.querySelector(selector) };
   global.window = new Node('window');
   const toolbar = body.appendChild(new Node('div', {}, ['toolbar', 'toolbar-hidden']));
+  toolbar.bounds = { top: 550, bottom: 600 };
   const toggle = toolbar.appendChild(new Node('button'));
   toggle.appendChild(new Node('svg'));
   toggle.appendChild(new Node('span'));
@@ -154,7 +161,8 @@ async function test(name, fn) {
     assert.deepEqual(env.order(), ['b', 'a', 'c']);
     assert.deepEqual(env.posts, [['b', 'a', 'c']]);
     assert.equal(document.activeElement, env.current('b').querySelector('.drag-handle'));
-    assert.equal(env.current('b').scrolled, true);
+    assert.equal(env.current('b').scrolled, undefined);
+    assert.deepEqual(document.activeElement.focusOptions, { preventScroll: true });
     assert.equal(env.status.textContent, 'Positions saved');
     env.toggle.emit('click');
     assert.equal(env.toggle.attributes['aria-pressed'], 'false');
@@ -224,6 +232,35 @@ async function test(name, fn) {
     assert.equal(document.activeElement, env.current('b').querySelector('.drag-handle'));
   });
 
+  await test('portrait arrows preserve the viewport and move exactly one visible neighbour', async () => {
+    const env = setup(['a', 'b', 'c']); env.update('claude', ['a', 'b', 'c']); await settle();
+    env.toggle.emit('click'); document.body.scrollTop = 320;
+    env.arrow('b', 'up'); await settle();
+    assert.deepEqual(env.order(), ['b', 'a', 'c']);
+    assert.equal(document.body.scrollTop, 320);
+    env.arrow('b', 'down'); await settle();
+    assert.deepEqual(env.order(), ['a', 'b', 'c']);
+    assert.equal(document.body.scrollTop, 320);
+    env.update('codex', ['d']);
+    assert.equal(document.body.scrollTop, 320);
+  });
+
+  await test('a tall card only scrolls enough to expose its move button above the toolbar', async () => {
+    const env = setup(['a', 'b', 'c']); env.update('claude', ['a', 'b', 'c']); await settle();
+    env.toggle.emit('click'); document.body.scrollTop = 200;
+    env.current('a').bounds = { top: 520, bottom: 1400 };
+    env.current('a').querySelector('[data-move="down"]').bounds = { top: 520, bottom: 564 };
+    env.arrow('a', 'down'); await settle();
+    assert.equal(document.body.scrollTop, 214);
+    assert.equal(env.current('a').scrolled, undefined);
+    env.current('a').querySelector('.drag-handle').bounds = { top: -20, bottom: 24 };
+    env.arrow('a', 'up'); await settle();
+    assert.equal(document.body.scrollTop, 194);
+  });
+
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../wwwroot/card-layout.css'), 'utf8');
+  assert.match(css, /#dashboardCards\.arranging\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(css, /\.editing-layout #mainView\s*\{\s*overflow-anchor:\s*none/);
   delete global.document; delete global.window; delete global.fetch;
   if (failures) process.exitCode = 1;
   else console.log('All card layout controller tests passed.');
