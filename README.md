@@ -34,7 +34,7 @@ local web page you can open on your phone from the same Wi-Fi network.
 
 1. **Download** the zip from the Releases page, extract it anywhere.
 2. **Run** `ClaudeUsage.exe`. The app starts minimised to the **system tray**.
-3. **Open the window** by double-clicking the tray icon, or right-click ->
+3. **Open the window** by double-clicking the tray icon, or left/right-click ->
    *Open*.
 4. Usage data refreshes automatically every few minutes.
 

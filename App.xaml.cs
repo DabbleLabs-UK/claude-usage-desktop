@@ -239,6 +239,18 @@ public partial class App : Application
                 Text = "Claude Usage",
                 ContextMenuStrip = menu,
             };
+            // Reuse WinForms' tray-menu path so left-click gets the same taskbar placement
+            // and foreground/dismiss behaviour as right-click. The method is private in
+            // .NET 10; retain the public Show fallback if a future framework removes it.
+            var showTrayMenu = typeof(WinForms.NotifyIcon)
+                .GetMethod("ShowContextMenu", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.CreateDelegate<Action>(_notifyIcon);
+            _notifyIcon.MouseClick += (_, e) =>
+            {
+                if (e.Button != WinForms.MouseButtons.Left) return;
+                if (showTrayMenu is not null) showTrayMenu();
+                else menu.Show(WinForms.Cursor.Position);
+            };
             _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
             _notifyIcon.Visible = true;
             _trayIconAvailable = true;
