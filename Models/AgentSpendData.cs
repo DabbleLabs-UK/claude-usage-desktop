@@ -18,6 +18,8 @@ public record AgentSpendMonthToDate(double TotalCost, int PricedRuns, int Unpric
 
 public record AgentSpendRunRates(double MonthlyAt24hPace, double MonthlyAt7dPace);
 
+public record AgentSpendCalendarWeek(double TotalCost, int PricedRuns, int UnpricedRuns, DateTimeOffset StartsAt);
+
 // Per-model breakdown row. The contract names the breakdown_by_model[] array but not its per-item
 // shape, so these fields are ClaudeUsage's best-effort read of a representative row (model,
 // provider, cost, run counts, token totals) -- every field is read tolerantly (see
@@ -55,4 +57,5 @@ public record AgentSpendData(
     // read (a missing/malformed file, a non-"ok" source status, or a local summary file that has
     // not been refreshed within AgentSpendFreshnessPolicy.FreshWindow). Never implies zeroed
     // figures -- it always carries the last good snapshot, just flagged.
-    bool IsStale = false);
+    bool IsStale = false,
+    AgentSpendCalendarWeek? CalendarWeek = null);

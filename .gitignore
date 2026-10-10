@@ -7,6 +7,8 @@ publish/
 binBuildCheck/
 *.zip
 installer/Output/
+__pycache__/
+*.py[cod]
 
 # Local deploy target for deploy-portfolio.sh (see deploy.config.example.json).
 deploy.config.json

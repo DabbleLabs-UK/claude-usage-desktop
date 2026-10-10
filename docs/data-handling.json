@@ -13,7 +13,15 @@
     "startup": "Opt-in Windows task runs under the signed-in Claude user and restarts after process failure. Removing the task preserves local files."
   },
   "lan_viewing": "The existing optional phone/browser UI serves usage and source labels on the user's LAN.",
-  "launcher_spend": "Reads the existing locally synchronized Agents & Inference summary; this change adds no new external spend destination.",
+  "openrouter_account_spend": {
+    "source": "Opt-in exporter makes read-only OpenRouter Analytics queries across all API keys accessible to the configured account management credential. Replaces the launcher-only card; no launcher totals are relabelled as account totals.",
+    "credentials": "The management credential stays in its configured protected file on the exporting machine. Only aggregate summaries are copied to the viewer; no credential, raw account identifier, prompt, model response or individual request record is sent to browsers.",
+    "transport": "Configurable local export or authenticated SSH from the viewer to an existing trusted exporter host. Queries send time ranges and metric/dimension names to OpenRouter, not prompts. No inference is performed.",
+    "storage": "Stores one atomically replaced account spend summary on the exporter and in local application data on the viewer. Includes costs, request counts, model/provider labels, token totals, 31 daily totals, periods, freshness and an internal credential fingerprint to prevent mixed-account caches. Failures preserve matching-account last-good values with a stale flag.",
+    "sharing": "Desktop and optional LAN browsers receive aggregate costs/counts, model/provider breakdowns, dates and stale/unavailable state via the existing local backend. The internal credential fingerprint is not included.",
+    "scheduling": "Optional per-user task refreshes every five minutes with bounded runtime. App reads the summary every three minutes and does not contact OpenRouter directly.",
+    "deletion": "Removing the optional sync task stops refreshes. Removing the exporter output and local application-data summary removes these cached spend totals; the existing usage-logs clear option does not remove this independent cache."
+  },
   "codex_credits": {
     "source": "Uses the existing authenticated Codex usage poll; adds no external API calls or prompt collection.",
     "storage": "Keeps at most eight days and 5000 timestamped credit-balance samples in the local usage-log/codex-credits.json file. A SHA-256 account identifier separates histories; raw account IDs and credentials are not saved in this file or sent to browsers.",
