@@ -516,11 +516,10 @@ public partial class App : Application
         builder.Services.AddSingleton<CodexPoller>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CodexPoller>());
 
-        // API-spend lane -- another INDEPENDENT failure domain. Reads a file Agents & Inference
-        // publishes; never touches the Claude or Codex state above.
-        builder.Services.AddSingleton<AgentSpendState>();
-        builder.Services.AddSingleton<AgentSpendPoller>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<AgentSpendPoller>());
+        // Account-wide spend is independent of Claude/Codex and never falls back to launcher data.
+        builder.Services.AddSingleton<OpenRouterSpendState>();
+        builder.Services.AddSingleton<OpenRouterSpendPoller>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<OpenRouterSpendPoller>());
 
         var app = builder.Build();
 
@@ -598,12 +597,8 @@ public partial class App : Application
         app.MapGet("/api/codex/status", (CodexUsageState state) =>
             Results.Ok(state.Status));
 
-        // API-spend lane -- independent from Claude/Codex. 404s until the first good (status=="ok")
-        // read of the Agents & Inference spend-summary file; the frontend hides the card until then.
-        app.MapGet("/api/agent-spend", (AgentSpendState state) =>
-            state.Current is { } data
-                ? Results.Ok(data)
-                : Results.NotFound(new { message = "No agent spend data yet." }));
+        app.MapGet("/api/openrouter-spend", (OpenRouterSpendState state) => Results.Ok(state.Current));
+        app.MapGet("/api/agent-spend", () => Results.StatusCode(410));
 
         // Cumulative usage series for the stats graph. range = 1d | 7d | 30d (default 1d).
         // Returns the SESSION (five_hour) and WEEK (seven_day) series, each computed from

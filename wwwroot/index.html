@@ -1447,7 +1447,7 @@
 <div id="agentSpendDetailView" class="detail-view hidden">
   <div class="detail-header">
     <button class="back-btn" onclick="history.back()">&#8592; Back</button>
-    <span class="detail-title">Launcher Spend</span>
+    <span class="detail-title">OpenRouter Account Spend</span>
   </div>
   <div id="agentSpendDetailBody"></div>
 </div>
@@ -1679,7 +1679,8 @@
   let _codexStatus            = null;   // last CodexStatus ({state}); null until the first Codex poll
   let _codexCardDataMap       = {};     // detail-view lookup for Codex cards (kept separate from _cardDataMap)
   // ---- API-spend lane state (fully independent of Claude/Codex above) ----
-  let _agentSpendData         = null;   // last AgentSpendData snapshot; null until the first good read
+  let _agentSpendData         = null;   // Account-wide data only, never the old launcher feed.
+  let _openRouterSpendStatus  = 'notConfigured';
   // Per-window mid-period-reset tracking (keyed by the ORIGINAL API field name, e.g. five_hour,
   // seven_day). Anthropic sometimes resets a window's credit counter to 0 WITHOUT advancing
   // resetsAt -- utilization craters but the countdown keeps ticking through the same deadline.
@@ -2252,26 +2253,50 @@
     return ' (' + s + ' ago)';
   }
 
-  // Defensive against any real-world payload shape this hasn't been tested against (a nested
-  // object present-but-partially-populated, a number arriving as a string, etc.) -- '|| {}' /
-  // Number(...) || 0 coercions mean this can NEVER throw, so a render fault can never be the
-  // reason the card silently fails to appear (see renderAgentSpend below, which relies on that).
-  function renderAgentSpendCard(data) {
-    const sym = currencySymbol(data.currency);
-    const r24 = data.rolling24h || {}, r7 = data.rolling7d || {}, mtd = data.monthToDate || {}, rr = data.runRates || {};
-    const num = v => Number(v) || 0;
+  function _spendEscape(value) {
+    return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
 
-    const footerParts = [sym + num(mtd.totalCost).toFixed(2), num(mtd.pricedRuns) + ' priced'];
-    if (num(mtd.unpricedRuns) > 0) footerParts.push(num(mtd.unpricedRuns) + ' unpriced');
+  function _validOpenRouterSpend(data) {
+    const valid = v => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+    return !!data && data.currency === 'USD' && Number.isFinite(Date.parse(data.generatedAt))
+      && ['rolling24h', 'rolling7d', 'monthToDate', 'calendarWeek'].every(key => data[key]
+        && valid(data[key].totalCost) && Number.isSafeInteger(data[key].pricedRuns) && data[key].pricedRuns >= 0)
+      && valid(data.rolling7d.dailyAverage) && data.runRates
+      && valid(data.runRates.monthlyAt24hPace) && valid(data.runRates.monthlyAt7dPace);
+  }
+
+  function acceptOpenRouterSpend(snapshot) {
+    _openRouterSpendStatus = snapshot && ['live', 'stale', 'unavailable', 'notConfigured'].includes(snapshot.status)
+      ? snapshot.status : 'unavailable';
+    _agentSpendData = snapshot && _validOpenRouterSpend(snapshot.data) ? snapshot.data : null;
+    if (_agentSpendData && _openRouterSpendStatus !== 'live') _agentSpendData = { ..._agentSpendData, isStale: true };
+    if (!_agentSpendData && _openRouterSpendStatus === 'live') _openRouterSpendStatus = 'unavailable';
+    renderAgentSpend();
+  }
+
+  // Missing/invalid data is not a genuine zero. A previously successful reading stays visible
+  // as stale; its original timestamp, not a recent file copy or page refresh, controls its age.
+  function renderAgentSpendCard(data) {
+    if (!_validOpenRouterSpend(data)) return '<div class="card agent-spend-card agent-spend-stale">'
+      + '<div class="card-head"><span class="label">OpenRouter Account Spend</span></div>'
+      + '<div class="reset">Spending unavailable. Waiting for a successful account update.</div></div>';
+    const age = Date.now() - Date.parse(data.generatedAt);
+    data = { ...data, isStale: data.isStale || age > 30 * 60000 || age < -5 * 60000 };
+    const sym = currencySymbol(data.currency);
+    const r24 = data.rolling24h, r7 = data.rolling7d, mtd = data.monthToDate, rr = data.runRates, week = data.calendarWeek;
+    const num = v => v;
+    const footerParts = ['7d total ' + sym + r7.totalCost.toFixed(2), 'MTD ' + sym + mtd.totalCost.toFixed(2)];
     const staleNote = data.isStale
-      ? ' &middot; <span style="color:var(--yellow)">stale, as of '
-        + new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        + _relativeAge(data.generatedAt) + '</span>'
-      : '';
+      ? '<span style="color:var(--yellow)">Stale - last successful update '
+        + _spendEscape(new Date(data.generatedAt).toLocaleString()) + '</span>'
+      : 'Updated ' + _spendEscape(new Date(data.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 
     return (
       '<div class="card agent-spend-card' + (data.isStale ? ' agent-spend-stale' : '') + '" onclick="openAgentSpendDetail()" style="cursor:pointer">'
-      + '<div class="card-head"><span class="label">Launcher Spend</span></div>'
+      + '<div class="card-head"><span class="label">OpenRouter Account Spend</span></div>'
+      + '<div class="spend-row-head"><span class="spend-row-label">THIS WEEK (SUN)</span>'
+      + '<span class="spend-row-value">' + sym + week.totalCost.toFixed(2) + ' &middot; ' + week.pricedRuns + ' requests</span></div>'
       + '<div class="spend-row">'
       +   '<div class="spend-row-head"><span class="spend-row-label">24H PACE</span>'
       +   '<span class="spend-row-value">' + sym + num(r24.totalCost).toFixed(2) + '/day &middot; ' + sym + num(rr.monthlyAt24hPace).toFixed(2) + '/mo</span></div>'
@@ -2282,20 +2307,13 @@
       +   '<span class="spend-row-value">' + sym + num(r7.dailyAverage).toFixed(2) + '/day &middot; ' + sym + num(rr.monthlyAt7dPace).toFixed(2) + '/mo</span></div>'
       +   _spendBar(num(rr.monthlyAt7dPace), 'var(--yellow-green)')
       + '</div>'
-      + '<div class="spend-scale-label">' + sym + SPEND_MONTHLY_CEILING + '/mo</div>'
-      + '<div class="reset spend-footer">' + footerParts.join(' &middot; ') + staleNote + '</div>'
+      + '<div class="spend-scale-label">' + sym + SPEND_MONTHLY_CEILING + '/mo reference, not a budget</div>'
+      + '<div class="reset spend-footer">' + footerParts.join(' &middot; ') + '<br>' + staleNote + '</div>'
       + '</div>');
   }
 
-  // Show/hide rule: the card appears whenever ANY spend data has EVER been adopted (_agentSpendData
-  // set at least once by a hub push or the initial REST fetch), REGARDLESS of data.isStale -- stale
-  // data still shows the card (dimmed via the .stale CSS class + a "stale, as of HH:MM" footer
-  // note), it just never gets zeroed or hidden. The card is hidden ONLY while _agentSpendData is
-  // still null, i.e. first-run/no-file, before a single good read has ever happened -- mirroring the
-  // Codex lane's "no login yet -> hide the section" treatment. Nothing here (or anywhere else this
-  // module touches _agentSpendData -- see the state declaration above) ever resets _agentSpendData
-  // back to null once real data has arrived, so once the card has appeared it never disappears again
-  // on its own; a failed/stale poll can only dim it.
+  // A configured but unavailable account has an explicit placeholder. Only an unconfigured
+  // integration is hidden. The backend retains valid same-account readings across failures.
   function renderAgentSpend() {
     console.log('[CU][AgentSpend] renderAgentSpend() called; _agentSpendData =', _agentSpendData);
     const col = document.getElementById('agentSpendCol');
@@ -2303,17 +2321,17 @@
       console.error('[CU][AgentSpend] #agentSpendCol not found in the DOM -- cannot render');
       return;
     }
-    if (!_agentSpendData) {
+    if (!_agentSpendData && _openRouterSpendStatus === 'notConfigured') {
       console.log('[CU][AgentSpend] no data yet -- hiding #agentSpendCol');
       col.classList.add('hidden');
       col.innerHTML = '';
-      dashboardLayout.update('launcher', col);
+      dashboardLayout.update('openrouter', col);
       return;
     }
     col.classList.remove('hidden');
     try {
-      col.innerHTML = dashboardCard('launcher:spend', 'Launcher', renderAgentSpendCard(_agentSpendData));
-      dashboardLayout.update('launcher', col);
+      col.innerHTML = dashboardCard('openrouter:spend', 'OpenRouter', renderAgentSpendCard(_agentSpendData));
+      dashboardLayout.update('openrouter', col);
       console.log('[CU][AgentSpend] card rendered; #agentSpendCol classList =', col.className,
         'clientHeight =', col.clientHeight, 'offsetTop (within #main) =', col.offsetTop);
     } catch (e) {
@@ -2359,7 +2377,9 @@
 
   function _renderAgentSpendDetail() {
     const body = document.getElementById('agentSpendDetailBody');
-    const data = _agentSpendData;
+    const data = _agentSpendData && { ..._agentSpendData, isStale: _agentSpendData.isStale
+      || Date.now() - Date.parse(_agentSpendData.generatedAt) > 30 * 60000
+      || Date.parse(_agentSpendData.generatedAt) - Date.now() > 5 * 60000 };
     if (!data) { body.innerHTML = '<div class="explain-block"><div class="explain-text">No spend data yet.</div></div>'; return; }
 
     const sym       = currencySymbol(data.currency);
@@ -2374,17 +2394,18 @@
 
     let html = '<div class="explain-block">'
       + '<div class="explain-title">Summary</div>'
-      + '<div class="explain-text" style="margin-bottom:8px">Only includes runs recorded by the Agents &amp; Inference launcher. These figures are not your complete OpenRouter account.</div>'
+      + '<div class="explain-text" style="margin-bottom:8px">OpenRouter-reported spending across all API keys in the connected account. Not limited to launcher jobs. This week starts Sunday in ' + _spendEscape(data.timezone || 'the configured timezone') + '. Rolling 24h and 7d totals use different date ranges; pace estimates assume 30 days and are not a bill or budget. Provider reporting can be delayed.</div>'
       + '<div class="spend-stat-grid">'
+      +   _spendStatRow('This week (Sunday start)', sym + data.calendarWeek.totalCost.toFixed(2))
+      +   _spendStatRow('Requests this week', String(data.calendarWeek.pricedRuns))
       +   _spendStatRow('24h spend', sym + r24.totalCost.toFixed(3))
       +   _spendStatRow('7d total', sym + r7.totalCost.toFixed(2))
       +   _spendStatRow('7d daily average', sym + r7.dailyAverage.toFixed(2))
       +   _spendStatRow('Month to date', sym + mtd.totalCost.toFixed(2))
       +   _spendStatRow('Run-rate at 24h pace', sym + rr.monthlyAt24hPace.toFixed(2) + '/mo')
       +   _spendStatRow('Run-rate at 7d pace', sym + rr.monthlyAt7dPace.toFixed(2) + '/mo')
-      +   _spendStatRow('Priced / unpriced runs (MTD)', mtd.pricedRuns + ' / ' + mtd.unpricedRuns)
-      +   _spendStatRow('Total runs (MTD)', String(totalRuns))
-      +   _spendStatRow('Average cost / run (MTD)', sym + avgCostPerRun.toFixed(4))
+      +   _spendStatRow('Requests (MTD)', String(totalRuns))
+      +   _spendStatRow('Average cost / request (MTD)', sym + avgCostPerRun.toFixed(4))
       +   _spendStatRow('Token totals', totalTokens ? totalTokens.toLocaleString() : '--')
       + '</div>'
       + (data.isStale
@@ -2401,7 +2422,7 @@
       html += '<div class="spend-history-list">' + dailyHist.map(function(h) {
         const pct = Math.max(0, Math.min(100, ((h.cost || 0) / maxCost) * 100));
         return '<div class="spend-history-row">'
-          + '<span class="spend-history-date">' + h.date + '</span>'
+          + '<span class="spend-history-date">' + _spendEscape(h.date) + '</span>'
           + '<div class="spend-history-bar-track"><div class="spend-history-bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>'
           + '<span class="spend-history-cost">' + sym + (h.cost || 0).toFixed(2) + '</span>'
           + (h.unpricedRuns > 0 ? '<span class="spend-history-unpriced">' + h.unpricedRuns + ' unpriced</span>' : '')
@@ -2410,17 +2431,16 @@
     }
     html += '</div>';
 
-    html += '<div class="explain-block"><div class="explain-title">Spend by model</div>';
+    html += '<div class="explain-block"><div class="explain-title">Spend by model (month to date)</div>';
     html += models.length
       ? '<div class="spend-table">' + models.map(function(m) {
           const avg = _spendAvgCostPerRun(m.cost, m.pricedRuns, m.unpricedRuns);
           const tok = (m.inputTokens || 0) + (m.outputTokens || 0);
           return '<div class="spend-table-row">'
-            + '<span class="spend-table-name">' + m.model
-            +   (m.provider ? ' <span class="spend-table-sub">(' + m.provider + ')</span>' : '') + '</span>'
+            + '<span class="spend-table-name">' + _spendEscape(m.model)
+            +   (m.provider ? ' <span class="spend-table-sub">(' + _spendEscape(m.provider) + ')</span>' : '') + '</span>'
             + '<span class="spend-table-cost">' + sym + m.cost.toFixed(2) + '</span>'
-            + '<span class="spend-table-meta">' + m.pricedRuns + 'p'
-            +   (m.unpricedRuns ? ' / ' + m.unpricedRuns + 'u' : '')
+            + '<span class="spend-table-meta">' + m.pricedRuns + ' requests'
             +   (tok ? ' &middot; ' + tok.toLocaleString() + ' tok' : '')
             +   ' &middot; avg ' + sym + avg.toFixed(4) + '</span>'
             + '</div>';
@@ -2428,13 +2448,13 @@
       : '<div class="explain-text">No per-model data yet.</div>';
     html += '</div>';
 
-    html += '<div class="explain-block"><div class="explain-title">Spend by provider</div>';
+    html += '<div class="explain-block"><div class="explain-title">Spend by provider (month to date)</div>';
     html += providers.length
       ? '<div class="spend-table">' + providers.map(function(p) {
           return '<div class="spend-table-row">'
-            + '<span class="spend-table-name">' + p.provider + '</span>'
+            + '<span class="spend-table-name">' + _spendEscape(p.provider) + '</span>'
             + '<span class="spend-table-cost">' + sym + p.cost.toFixed(2) + '</span>'
-            + '<span class="spend-table-meta">' + p.pricedRuns + 'p' + (p.unpricedRuns ? ' / ' + p.unpricedRuns + 'u' : '') + '</span>'
+            + '<span class="spend-table-meta">' + p.pricedRuns + ' requests</span>'
             + '</div>';
         }).join('') + '</div>'
       : '<div class="explain-text">No per-provider data yet.</div>';
@@ -2562,7 +2582,7 @@
     document.getElementById('mainView').classList.toggle('stale-mode', !!(_backoffState && _lastGoodData));
   }
 
-  setInterval(() => { if (lastData) render(lastData); }, 60000);
+  setInterval(() => { if (lastData) render(lastData); if (_agentSpendData) renderAgentSpend(); }, 60000);
 
   // ---- Backoff status banner ----
 
@@ -3025,17 +3045,17 @@
 
   // API-spend lane: independent hub messages + initial REST fetch. Never touches the Claude or
   // Codex render paths, and vice versa.
-  conn.on('agentSpendUpdated', function(d) {
+  conn.on('openRouterSpendUpdated', function(d) {
     console.log('[CU][AgentSpend] hub push received', d);
-    _markServerContact(true); _agentSpendData = d; renderAgentSpend();
+    _markServerContact(true); acceptOpenRouterSpend(d);
   });
 
   console.log('[CU][AgentSpend] initial fetch starting');
-  fetch('/api/agent-spend')
+  fetch('/api/openrouter-spend')
     .then(r => r.ok ? r.json() : null)
     .then(d => {
       console.log('[CU][AgentSpend] initial fetch resolved', d);
-      if (d) { _agentSpendData = d; renderAgentSpend(); }
+      if (d) acceptOpenRouterSpend(d);
     })
     .catch(function(e) { console.log('[CU][AgentSpend] initial fetch failed', e); });
 
@@ -3188,10 +3208,10 @@
 
     // API-spend lane too (independent feed).
     console.log('[CU][AgentSpend] forceRecovery fetch starting');
-    fetch('/api/agent-spend').then(r => r.ok ? r.json() : null)
+    fetch('/api/openrouter-spend').then(r => r.ok ? r.json() : null)
       .then(function(d) {
         console.log('[CU][AgentSpend] forceRecovery fetch resolved', d);
-        if (d) { _agentSpendData = d; renderAgentSpend(); _markServerContact(false); }
+        if (d) { acceptOpenRouterSpend(d); _markServerContact(false); }
       })
       .catch(function(e) { console.log('[CU][AgentSpend] forceRecovery fetch failed', e); });
 
@@ -3327,11 +3347,11 @@
     // whatever it had before the drop (or still hidden, if it never got data before the drop) until
     // the next poller broadcast, up to 180s later.
     console.log('[CU][AgentSpend] onreconnected fetch starting');
-    fetch('/api/agent-spend')
+    fetch('/api/openrouter-spend')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         console.log('[CU][AgentSpend] onreconnected fetch resolved', d);
-        if (d) { _agentSpendData = d; renderAgentSpend(); _markServerContact(false); }
+        if (d) { acceptOpenRouterSpend(d); _markServerContact(false); }
       })
       .catch(function(e) { console.log('[CU][AgentSpend] onreconnected fetch failed', e); });
   });
@@ -3359,10 +3379,10 @@
         fetch('/api/codex/status').then(r => r.ok ? r.json() : undefined)
           .then(s => { if (s !== undefined) { _codexStatus = s; renderCodex(); } }).catch(function() {});
         // Poll the API-spend lane on the same fallback cadence (independent of the others).
-        fetch('/api/agent-spend').then(r => r.ok ? r.json() : null)
+        fetch('/api/openrouter-spend').then(r => r.ok ? r.json() : null)
           .then(d => {
             console.log('[CU][AgentSpend] no-hub-fallback poll resolved', d);
-            if (d) { _agentSpendData = d; renderAgentSpend(); }
+            if (d) acceptOpenRouterSpend(d);
           }).catch(function(e) { console.log('[CU][AgentSpend] no-hub-fallback poll failed', e); });
       }, 15000);
       return;

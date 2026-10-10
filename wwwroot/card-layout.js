@@ -1,7 +1,8 @@
 (function (root) {
   'use strict';
   function normalize(order) {
-    return Array.isArray(order) ? [...new Set(order.filter(id => typeof id === 'string' && /^[a-zA-Z0-9:_-]{1,160}$/.test(id)))].slice(0, 200) : [];
+    return Array.isArray(order) ? [...new Set(order.filter(id => typeof id === 'string' && /^[a-zA-Z0-9:_-]{1,160}$/.test(id))
+      .map(id => id === 'launcher:spend' ? 'openrouter:spend' : id))].slice(0, 200) : [];
   }
   function resolve(order, available) {
     const saved = normalize(order);
@@ -36,7 +37,7 @@
   }
   function attach(board, toggle, status) {
     let order = [], editing = false, dragging = null, dirty = false, saving = false, loaded = false;
-    const sources = new Map([['claude', []], ['codex', []], ['launcher', []]]);
+    const sources = new Map([['claude', []], ['codex', []], ['openrouter', []]]);
     const cards = () => [...sources.values()].flatMap(nodes => nodes.filter(n => n.dataset.layoutId));
     const ids = () => cards().map(n => n.dataset.layoutId);
     const report = text => { status.textContent = text; };

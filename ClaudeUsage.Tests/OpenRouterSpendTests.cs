@@ -319,4 +319,26 @@ public class OpenRouterSpendTests
         Assert.EndsWith(Path.Combine("ClaudeUsage", "openrouter-spend.v1.json"), OpenRouterSpendReader.FilePath);
         Assert.DoesNotContain("AgentsInference", OpenRouterSpendReader.FilePath);
     }
+
+    [Fact]
+    public void RuntimeUsesOnlyAccountSpendLane_AndSharesTheSameSnapshotContract()
+    {
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        var app = File.ReadAllText(Path.Combine(root, "App.xaml.cs"));
+        var poller = File.ReadAllText(Path.Combine(root, "Services", "OpenRouterSpendPoller.cs"));
+        var html = File.ReadAllText(Path.Combine(root, "wwwroot", "index.html"));
+
+        Assert.Contains("AddSingleton<OpenRouterSpendState>()", app);
+        Assert.Contains("GetRequiredService<OpenRouterSpendPoller>()", app);
+        Assert.DoesNotContain("AddSingleton<AgentSpendState>()", app);
+        Assert.DoesNotContain("GetRequiredService<AgentSpendPoller>()", app);
+        Assert.Contains("app.MapGet(\"/api/openrouter-spend\", (OpenRouterSpendState state) => Results.Ok(state.Current))", app);
+        Assert.Contains("app.MapGet(\"/api/agent-spend\", () => Results.StatusCode(410))", app);
+        Assert.Contains("SendAsync(\"openRouterSpendUpdated\", _state.Current, stoppingToken)", poller);
+        Assert.Contains("IntervalSec = 180", poller);
+        Assert.Contains("OpenRouterSpendReader.Read()", poller);
+        Assert.DoesNotContain("AgentSpendReader", poller);
+        Assert.Contains("/api/openrouter-spend", html);
+        Assert.Contains("openRouterSpendUpdated", html);
+    }
 }

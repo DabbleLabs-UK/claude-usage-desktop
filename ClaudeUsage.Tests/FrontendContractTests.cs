@@ -19,12 +19,15 @@ public class FrontendContractTests
     }
 
     [Fact]
-    public void AgentSpendCard_IdentifiesLauncherOnlyScope()
+    public void OpenRouterSpendCard_IdentifiesAccountScopeAndSeparateFeed()
     {
         var html = File.ReadAllText(IndexHtmlPath);
 
-        Assert.Contains("Launcher Spend", html);
-        Assert.Contains("not your complete OpenRouter account", html);
+        Assert.Contains("OpenRouter Account Spend", html);
+        Assert.Contains("across all API keys in the connected account", html);
+        Assert.Contains("/api/openrouter-spend", html);
+        Assert.DoesNotContain("/api/agent-spend", html);
+        Assert.DoesNotContain("Launcher Spend", html);
         Assert.DoesNotContain("<span class=\"label\">API Spend</span>", html);
     }
 }

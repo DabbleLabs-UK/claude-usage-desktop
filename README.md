@@ -38,6 +38,19 @@ local web page you can open on your phone from the same Wi-Fi network.
    *Open*.
 4. Usage data refreshes automatically every few minutes.
 
+### OpenRouter account spend
+
+The optional **OpenRouter Account Spend** card shows provider-reported spending
+across all API keys in the connected account: this week's actual cost and request
+count, rolling 24-hour/seven-day pace, month-to-date totals, and model/provider
+breakdowns. It replaces the former launcher-only card and keeps its saved position.
+This week starts on Sunday in the exporter's configured timezone; rolling seven-day
+totals are a different period. Monthly pace assumes 30 days, not a billing forecast.
+
+The exporter keeps the management credential on its source machine and sends only
+aggregate totals to the desktop. Missing or failed reads show unavailable/stale,
+never a made-up zero. [Setup and data scope](docs/openrouter-spend.md).
+
 ### Phone / tablet access
 
 Open **Settings** (gear icon in the toolbar) to see the LAN URL and QR code.
