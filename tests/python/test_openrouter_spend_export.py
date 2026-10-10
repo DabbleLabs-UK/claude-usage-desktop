@@ -226,6 +226,35 @@ class PersistenceTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "Windows sync integration test")
 class WindowsSyncTests(unittest.TestCase):
+    def test_installer_uses_absolute_paths_without_task_working_directory(self):
+        with tempfile.TemporaryDirectory(prefix="account sync installer ") as directory:
+            installer = str(MODULE_PATH.parent / "install-openrouter-spend-sync.ps1").replace("'", "''")
+            folder = directory.replace("'", "''")
+            script = r'''
+function New-ScheduledTaskAction {
+    param($Execute, $Argument, $WorkingDirectory)
+    if ($PSBoundParameters.ContainsKey('WorkingDirectory')) { throw 'Task must not depend on a profile working directory.' }
+    if (-not [IO.Path]::IsPathRooted($Execute)) { throw 'Task executable must be absolute.' }
+    if ($Argument -notmatch '^//B //Nologo "[A-Za-z]:\\') { throw 'Helper path must be absolute and quoted.' }
+    [pscustomobject]@{ Execute = $Execute; Arguments = $Argument }
+}
+function New-ScheduledTaskTrigger { param([switch]$Once, $At, $RepetitionInterval, [switch]$AtLogOn, $User); [pscustomobject]@{ Mock = $true } }
+function New-ScheduledTaskPrincipal { param($UserId, $LogonType, $RunLevel); [pscustomobject]@{ Mock = $true } }
+function New-ScheduledTaskSettingsSet {
+    param([switch]$StartWhenAvailable, $ExecutionTimeLimit, $MultipleInstances, [switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries)
+    if ($ExecutionTimeLimit.TotalMinutes -ne 4 -or $MultipleInstances -ne 'IgnoreNew') { throw 'Unexpected task bounds.' }
+    [pscustomobject]@{ Mock = $true }
+}
+function Register-ScheduledTask { param($TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force); if ($TaskName -ne 'ClaudeUsage OpenRouter Account Spend Sync') { throw 'Unexpected task name.' } }
+function Start-ScheduledTask { throw 'NoStart must not launch a task.' }
+'''
+            script += "\n& '" + installer + "' -Mode Remote -RemoteHost fake-test-host -CredentialFile '~/.private/test.json' -SshPath powershell.exe -InstallDirectory '" + folder + "' -Destination '" + folder + "\\summary.json' -NoStart\n"
+            result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((Path(directory) / "run-hidden.vbs").is_file())
+            self.assertEqual(json.loads((Path(directory) / "config.json").read_text())["remote_host"], "fake-test-host")
+
     def run_sync(self, directory, collector_body, previous=None):
         directory = Path(directory)
         collector = directory / "fake collector's script.py"

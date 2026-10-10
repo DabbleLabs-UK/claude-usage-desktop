@@ -63,7 +63,8 @@ $helper = 'Set shell = CreateObject("WScript.Shell")' + "`r`n" + 'WScript.Quit s
 $helperPath = Join-Path $InstallDirectory 'run-hidden.vbs'
 [IO.File]::WriteAllText($helperPath, $helper, (New-Object Text.UTF8Encoding $false))
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wscript.exe') -Argument ('//B //Nologo "' + $helperPath + '"') -WorkingDirectory $InstallDirectory
+# All launcher/config paths are absolute, so no task working directory is needed.
+$action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wscript.exe') -Argument ('//B //Nologo "' + $helperPath + '"')
 $periodic = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
 $logon = New-ScheduledTaskTrigger -AtLogOn -User $identity.Name
 $principal = New-ScheduledTaskPrincipal -UserId $identity.Name -LogonType Interactive -RunLevel Limited

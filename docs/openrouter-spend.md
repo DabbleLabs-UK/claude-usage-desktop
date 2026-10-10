@@ -80,6 +80,11 @@ The management key remains on that machine.
 Run the installer explicitly as the Windows user who owns the desktop app.
 It is opt-in, keeps backups of existing sync scripts/configuration, and does
 not install a public application release. Dot-sourcing it registers no task.
+Run it from a normal Windows Terminal or PowerShell session. Packaged automation
+hosts can redirect AppData writes into their private cache, making setup files
+invisible to an ordinary scheduled task. Registration alone is not verification:
+check that the task finishes with `LastTaskResult` equal to `0` and the summary's
+successful timestamp advances in the normal Windows user's filesystem.
 It creates **ClaudeUsage OpenRouter Account Spend Sync**, using the app-owned
 hidden helper rather than any Infra checkout. The task runs after sign-in and
 every five minutes, including on battery. It has a four-minute execution limit,
