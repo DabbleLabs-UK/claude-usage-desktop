@@ -21,6 +21,7 @@ public sealed class CodexPoller : BackgroundService
     private readonly CodexUsageService _service;
     private readonly CodexUsageState _state;
     private readonly CodexCreditHistory _creditHistory;
+    private readonly CodexQuotaLog _quotaLog;
     private readonly PollLog _pollLog;
     private readonly IHubContext<UsageHub> _hub;
     private readonly ILogger<CodexPoller> _logger;
@@ -29,6 +30,7 @@ public sealed class CodexPoller : BackgroundService
         CodexUsageService service,
         CodexUsageState state,
         CodexCreditHistory creditHistory,
+        CodexQuotaLog quotaLog,
         PollLog pollLog,
         IHubContext<UsageHub> hub,
         ILogger<CodexPoller> logger)
@@ -36,6 +38,7 @@ public sealed class CodexPoller : BackgroundService
         _service = service;
         _state = state;
         _creditHistory = creditHistory;
+        _quotaLog = quotaLog;
         _pollLog = pollLog;
         _hub = hub;
         _logger = logger;
@@ -68,6 +71,9 @@ public sealed class CodexPoller : BackgroundService
             {
                 data = _creditHistory.Record(data, result.AccountHash);
                 _state.Update(data);
+                // Record successful observations even if delivery to a browser fails.
+                // This uses its own file and lock, never the shared poll.log lock.
+                _quotaLog.Append(data, result.AccountHash);
                 await _hub.Clients.All.SendAsync("codexUsageUpdated", data, ct);
                 await _hub.Clients.All.SendAsync("codexStatusUpdated", _state.Status, ct);
                 _pollLog.LogCodexSuccess(result.Source, data);

@@ -25,6 +25,11 @@ public sealed class CodexUsageService
     public sealed record CodexResult(CodexState State, CodexUsageData? Data, string Source, string Detail,
         string? AccountHash = null);
 
+    public static string? CurrentAccountHash() => HashAccount(CodexCredentialStore.Resolve(out _)?.AccountId);
+
+    private static string? HashAccount(string? accountId) => string.IsNullOrWhiteSpace(accountId) ? null
+        : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(accountId)));
+
     public async Task<CodexResult> FetchAsync()
     {
         var creds = CodexCredentialStore.Resolve(out var source);
@@ -55,8 +60,7 @@ public sealed class CodexUsageService
 
             var body = await response.Content.ReadAsStringAsync();
             var data = CodexUsageParser.Parse(body, DateTimeOffset.UtcNow);
-            var accountHash = string.IsNullOrWhiteSpace(creds.AccountId) ? null
-                : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(creds.AccountId)));
+            var accountHash = HashAccount(creds.AccountId);
             return new CodexResult(CodexState.Live, data, source, $"{data.Windows.Count} window(s)", accountHash);
         }
         catch (HttpRequestException ex)

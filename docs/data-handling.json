@@ -22,6 +22,13 @@
     "scheduling": "Optional per-user task refreshes every five minutes with bounded runtime. App reads the summary every three minutes and does not contact OpenRouter directly.",
     "deletion": "Removing the optional sync task stops refreshes. Removing the exporter output and local application-data summary removes these cached spend totals; the existing usage-logs clear option does not remove this independent cache."
   },
+  "stats_history": {
+    "source": "Claude statistics read the existing local monthly usage logs. Codex statistics record quota windows from successful fresh results of the existing Codex poll; there are no additional provider requests.",
+    "storage": "Codex quota history is append-only monthly JSONL under the existing usage-log directory, separated by a SHA-256 account identifier. Records contain the observation time, quota-window durations, used percentages and reset times. They do not contain raw account IDs, credentials, credit balances, prompts or responses. History begins when this feature is installed and is retained until cleared with usage logs.",
+    "derived": "Statistics select a bounded 1-, 7- or 30-day period ending at the requested time, capped at the present. Curves accumulate observed positive percentage-point changes from a zero baseline. Missing readings and reset changes do not establish complete consumption.",
+    "sharing": "The existing desktop and optional LAN Stats page receive selected-period aggregate curves, window labels, time bounds and the earliest available observation. Account identifiers and raw persisted records are not returned.",
+    "deletion": "The existing Clear data usage-logs option and usage-log uninstall cleanup remove Codex quota history with the Claude usage logs."
+  },
   "codex_credits": {
     "source": "Uses the existing authenticated Codex usage poll; adds no external API calls or prompt collection.",
     "storage": "Keeps at most eight days and 5000 timestamped credit-balance samples in the local usage-log/codex-credits.json file. A SHA-256 account identifier separates histories; raw account IDs and credentials are not saved in this file or sent to browsers.",

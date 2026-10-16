@@ -12,6 +12,11 @@
        and run without dragging in WPF/WinForms or the shared About project. -->
   <ItemGroup>
     <Compile Include="..\Services\CumulativeUsage.cs" Link="CumulativeUsage.cs" />
+    <Compile Include="..\Services\StatsWindow.cs" Link="StatsWindow.cs" />
+    <Compile Include="..\Services\MonthlyUsageFiles.cs" Link="MonthlyUsageFiles.cs" />
+    <Compile Include="..\Services\UsageLog.cs" Link="UsageLog.cs" />
+    <Compile Include="..\Services\CodexQuotaLog.cs" Link="CodexQuotaLog.cs" />
+    <Compile Include="..\Services\StatsHistory.cs" Link="StatsHistory.cs" />
     <Compile Include="..\Services\RefreshCooldownPolicy.cs" Link="RefreshCooldownPolicy.cs" />
     <Compile Include="..\Services\LoginStatePolicy.cs" Link="LoginStatePolicy.cs" />
     <Compile Include="..\Services\ExtraUsageGuard.cs" Link="ExtraUsageGuard.cs" />
@@ -38,6 +43,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />

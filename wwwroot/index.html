@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="credits-card.css">
   <script src="credits-card.js"></script>
   <script src="card-layout.js"></script>
+  <script src="usage-stats.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -1058,6 +1059,10 @@
       text-align: center;
     }
     .chip:hover { color: var(--text); border-color: var(--muted); }
+    .chip:disabled { opacity: 0.4; cursor: default; }
+    .stats-navigation { display: flex; flex-wrap: wrap; gap: 8px; }
+    .stats-navigation .chip { min-width: 70px; padding: 7px 8px; }
+    .stats-period { color: var(--dim); font-size: 0.72rem; line-height: 1.5; overflow-wrap: anywhere; }
     .chip.active {
       background: var(--accent);
       border-color: var(--accent);
@@ -1088,6 +1093,7 @@
 
     .chart-legend {
       display: flex;
+      flex-wrap: wrap;
       gap: 16px;
       justify-content: center;
       font-size: 0.7rem;
@@ -1430,18 +1436,26 @@
     <span class="detail-title">Statistics</span>
   </div>
   <div class="range-chips" id="rangeChips">
-    <button class="chip" data-range="1d" onclick="setStatsRange('1d')">1d</button>
-    <button class="chip" data-range="7d" onclick="setStatsRange('7d')">7d</button>
-    <button class="chip" data-range="30d" onclick="setStatsRange('30d')">30d</button>
+    <button class="chip" data-range="1d" onclick="setStatsRange('1d')" title="Show one day" aria-pressed="true">1d</button>
+    <button class="chip" data-range="7d" onclick="setStatsRange('7d')" title="Show seven days" aria-pressed="false">7d</button>
+    <button class="chip" data-range="30d" onclick="setStatsRange('30d')" title="Show thirty days" aria-pressed="false">30d</button>
+  </div>
+  <div class="stats-navigation" aria-label="Usage history navigation">
+    <button class="chip" id="statsPrevious" onclick="previousStatsWindow()" title="Previous period for both charts">Previous</button>
+    <button class="chip" id="statsNext" onclick="nextStatsWindow()" title="Next period for both charts" disabled>Next</button>
+    <button class="chip" id="statsLatest" onclick="latestStatsWindow()" title="Return both charts to the latest period" disabled>Latest</button>
+  </div>
+  <div id="statsPeriod" class="stats-period" aria-live="polite"></div>
+  <div class="chart-card">
+    <div class="chart-title" id="claudeStatsTitle">Claude usage</div>
+    <div id="statsChart" class="chart-area" role="region" aria-labelledby="claudeStatsTitle" aria-live="polite"></div>
   </div>
   <div class="chart-card">
-    <div class="chart-title">Cumulative usage (normalised)</div>
-    <div id="statsChart" class="chart-area"></div>
-    <div class="chart-legend">
-      <span class="legend-item"><span class="legend-swatch session"></span>Session</span>
-      <span class="legend-item"><svg width="22" height="6" style="display:block;flex-shrink:0"><line x1="0" y1="3" x2="22" y2="3" stroke="#2dd4bf" stroke-width="2" stroke-dasharray="3,2"/></svg>Week</span>
-    </div>
+    <div class="chart-title" id="codexStatsTitle">Codex usage</div>
+    <div id="codexStatsChart" class="chart-area" role="region" aria-labelledby="codexStatsTitle" aria-live="polite"></div>
   </div>
+  <div class="chart-note">Lines show cumulative observed percentage-point increases (pp), not credits. Each line has its own vertical scale, so line heights cannot be compared directly. Gaps while the app is off or samples are missing are unknown, not zero usage. This is observed history, not complete account usage.</div>
+  <div class="chart-note">Codex history starts with this update and is specific to the current account. Each reported quota window has its own line; a weekly line requires the account to report a weekly window.</div>
 </div>
 
 <div id="agentSpendDetailView" class="detail-view hidden">
@@ -3873,9 +3887,16 @@
 
   // ---- Stats ----
 
-  let _statsRange = '1d';
-  let _statsData  = null;
-  const _RANGE_MS = { '1d': 86400000, '7d': 604800000, '30d': 2592000000 };
+  function _statsUnavailable() {
+    ['statsChart', 'codexStatsChart'].forEach(function(id) {
+      document.getElementById(id).textContent = 'Statistics could not load. Reopen the app or reload this page to retry.';
+    });
+  }
+  const _usageStats = typeof UsageStats !== 'undefined' ? UsageStats.createController({
+    document: document,
+    fetch: function(url) { return fetch(url); },
+    onRender: function() { _checkToolbarOverflow(); }
+  }) : { open: _statsUnavailable, setRange: _statsUnavailable, previous: _statsUnavailable, next: _statsUnavailable, latest: _statsUnavailable };
 
   window.openStats = function() {
     const atMain = !history.state || history.state.view === 'main';
@@ -3883,8 +3904,7 @@
     else        history.replaceState({ view: 'stats' }, '');
     _hideAllViews();
     document.getElementById('statsView').classList.remove('hidden');
-    _markActiveChip();
-    loadStats();
+    _usageStats.open();
     _checkToolbarOverflow();
   };
 
@@ -3894,136 +3914,10 @@
     _checkToolbarOverflow();
   }
   window.closeStats = closeStats;
-
-  window.setStatsRange = function(r) {
-    if (!_RANGE_MS[r] || r === _statsRange) { if (_RANGE_MS[r]) { _markActiveChip(); loadStats(); } return; }
-    _statsRange = r;
-    _markActiveChip();
-    loadStats();
-  };
-
-  function _markActiveChip() {
-    document.querySelectorAll('#rangeChips .chip').forEach(function(c) {
-      c.classList.toggle('active', c.dataset.range === _statsRange);
-    });
-  }
-
-  async function loadStats() {
-    const host = document.getElementById('statsChart');
-    try {
-      const r = await fetch('/api/usage-log?range=' + _statsRange);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      _statsData = await r.json();
-    } catch (e) {
-      _statsData = null;
-    }
-    host.innerHTML = renderStatsChart(_statsData, _statsRange);
-    _checkToolbarOverflow();
-  }
-
-  // Hand-rolled SVG line chart: two cumulative series (session solid, week dashed/lighter).
-  // Dual independent axes: left = Session (accent), right = Week (dim). Each axis is scaled
-  // to its own exact window max (latest value; cumulative is monotonic) so both lines reach
-  // the top of the plot. Tick labels show real cumulative % values. x domain = [now-span, now].
-  // Step-after rendering: each point's value holds flat until the next point.
-  function renderStatsChart(data, range) {
-    const W = 380, H = 200;
-    const padL = 40, padR = 32, padT = 12, padB = 24;
-    const plotW = W - padL - padR;
-    const plotH = H - padT - padB;
-    const axis = 'var(--muted)';
-    const sessColor = 'var(--accent)';
-    const weekColor = '#2dd4bf';
-    const grid = 'rgba(255,255,255,0.07)';
-
-    const now    = Date.now();
-    const spanMs = _RANGE_MS[range] || _RANGE_MS['1d'];
-    const tMin   = now - spanMs;
-
-    const toPts = arr => (arr || []).map(p => ({ ms: new Date(p.t).getTime(), v: p.v }));
-    const session = toPts(data && data.session);
-    const week    = toPts(data && data.week);
-
-    // Sparse/empty: too few logged points to draw a line on either series.
-    const sparse = session.length < 2 && week.length < 2;
-
-    // Exact max in the window (cumulative is monotonic so last value = max).
-    // Guard divide-by-zero: series with 0 usage draws flat at bottom, axis labelled 0.
-    const sMax = session.length ? session[session.length - 1].v : 0;
-    const wMax = week.length    ? week[week.length - 1].v       : 0;
-
-    const fmtTick = function(v) { return v % 1 === 0 ? v.toFixed(0) : v.toFixed(1); };
-
-    const x  = ms => padL + ((ms - tMin) / spanMs) * plotW;
-    const yS = v  => padT + plotH - (sMax > 0 ? v / sMax : 0) * plotH;
-    const yW = v  => padT + plotH - (wMax > 0 ? v / wMax : 0) * plotH;
-
-    const fmtT = ms => {
-      const d = new Date(ms);
-      return spanMs <= 86400000
-        ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        : (d.getMonth() + 1) + '/' + d.getDate();
-    };
-
-    // Three gridlines at 0 / max/2 / max of each axis.
-    // Left ticks label Session's real % values; right ticks label Week's real % values.
-    let g = '';
-    [0, 0.5, 1].forEach(function(f) {
-      const yy = padT + plotH - f * plotH;
-      g += '<line x1="' + padL + '" y1="' + yy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + yy.toFixed(1)
-         + '" stroke="' + grid + '" stroke-width="1"/>';
-      g += '<line x1="' + (padL - 4) + '" y1="' + yy.toFixed(1) + '" x2="' + padL + '" y2="' + yy.toFixed(1)
-         + '" stroke="' + sessColor + '" stroke-width="1"/>';
-      g += '<text x="' + (padL - 6) + '" y="' + (yy + 3).toFixed(1) + '" text-anchor="end" fill="' + sessColor
-         + '" font-size="8" font-family="system-ui,sans-serif">' + fmtTick(f * sMax) + '</text>';
-      g += '<line x1="' + (W - padR) + '" y1="' + yy.toFixed(1) + '" x2="' + (W - padR + 4) + '" y2="' + yy.toFixed(1)
-         + '" stroke="' + weekColor + '" stroke-width="1"/>';
-      g += '<text x="' + (W - padR + 6) + '" y="' + (yy + 3).toFixed(1) + '" text-anchor="start" fill="' + weekColor
-         + '" font-size="8" font-family="system-ui,sans-serif">' + fmtTick(f * wMax) + '</text>';
-    });
-
-    let xl = '';
-    [0, 0.5, 1].forEach(function(f) {
-      const xx = padL + f * plotW;
-      const anchor = f === 0 ? 'start' : (f === 1 ? 'end' : 'middle');
-      xl += '<text x="' + xx.toFixed(1) + '" y="' + (H - 8) + '" text-anchor="' + anchor + '" fill="' + axis
-          + '" font-size="8" font-family="system-ui,sans-serif">' + fmtT(tMin + f * spanMs) + '</text>';
-    });
-
-    // Step-after interpolation using each series' own normalised y-scale.
-    const stepPoly = (pts, yFn) => {
-      if (!pts.length) return '';
-      const out = [x(pts[0].ms).toFixed(1) + ',' + yFn(pts[0].v).toFixed(1)];
-      for (let i = 1; i < pts.length; i++) {
-        out.push(x(pts[i].ms).toFixed(1) + ',' + yFn(pts[i - 1].v).toFixed(1));
-        out.push(x(pts[i].ms).toFixed(1) + ',' + yFn(pts[i].v).toFixed(1));
-      }
-      return out.join(' ');
-    };
-    let series = '';
-    if (!sparse) {
-      if (week.length >= 2)
-        series += '<polyline fill="none" stroke="' + weekColor + '" stroke-width="1.5" stroke-dasharray="4,3"'
-                + ' stroke-linejoin="round" points="' + stepPoly(week, yW) + '"/>';
-      if (session.length >= 2)
-        series += '<polyline fill="none" stroke="var(--accent)" stroke-width="2"'
-                + ' stroke-linejoin="round" points="' + stepPoly(session, yS) + '"/>';
-    }
-
-    const frame = '<rect x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + plotH
-                + '" fill="none" stroke="var(--border)" stroke-width="1"/>';
-    const leftAxisLine  = '<line x1="' + padL + '" y1="' + padT + '" x2="' + padL + '" y2="' + (padT + plotH)
-                        + '" stroke="' + sessColor + '" stroke-width="1"/>';
-    const rightAxisLine = '<line x1="' + (W - padR) + '" y1="' + padT + '" x2="' + (W - padR) + '" y2="' + (padT + plotH)
-                        + '" stroke="' + weekColor + '" stroke-width="1"/>';
-    const empty = sparse
-      ? '<text x="' + (padL + plotW / 2) + '" y="' + (padT + plotH / 2) + '" text-anchor="middle" fill="' + axis
-        + '" font-size="10" font-family="system-ui,sans-serif">Collecting data — check back soon</text>'
-      : '';
-
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">'
-         + g + frame + leftAxisLine + rightAxisLine + series + xl + empty + '</svg>';
-  }
+  window.setStatsRange = function(range) { return _usageStats.setRange(range); };
+  window.previousStatsWindow = function() { return _usageStats.previous(); };
+  window.nextStatsWindow = function() { return _usageStats.next(); };
+  window.latestStatsWindow = function() { return _usageStats.latest(); };
 
   // ---- Settings ----
 

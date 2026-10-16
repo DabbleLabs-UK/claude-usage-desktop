@@ -51,6 +51,28 @@ The exporter keeps the management credential on its source machine and sends onl
 aggregate totals to the desktop. Missing or failed reads show unavailable/stale,
 never a made-up zero. [Setup and data scope](docs/openrouter-spend.md).
 
+### Usage statistics
+
+Open **Stats** from the bottom toolbar to see Claude and Codex quota-usage
+graphs for the same period. Select 1, 7 or 30 days, use **Previous** and **Next**
+to move by that duration, or choose **Latest** to return to the present. The
+displayed dates identify the selected period; navigation stops at the present
+and the beginning of recorded history.
+
+Each line starts at zero and adds observed increases in a quota window's used
+percentage. The values are percentage points of that quota, rather than tokens,
+money or a percentage of the graph's selected time span. Each line has its own
+vertical scale, so equal heights do not mean equal consumption. Reset drops do
+not subtract usage, and unobserved activity cannot be reconstructed.
+
+Claude uses the existing local usage log. Codex records successful quota readings
+from the existing poll, with separate lines for the actual window durations
+reported by Codex. Its history starts with this version, stays separate for each
+account and survives restarts. The credit-balance history is used by the credits
+card separately. Missing readings, long gaps and reset changes can leave Codex
+usage uncounted; sparse or empty periods are shown explicitly. **Clear data ->
+Usage logs** removes both providers' history.
+
 ### Phone / tablet access
 
 Open **Settings** (gear icon in the toolbar) to see the LAN URL and QR code.

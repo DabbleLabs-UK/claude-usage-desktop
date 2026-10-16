@@ -22,9 +22,7 @@ public sealed record LoggedSample(DateTimeOffset Time, IReadOnlyDictionary<strin
 // already-written history can never be corrupted.
 public sealed class UsageLog
 {
-    private static readonly string LogDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "ClaudeUsage", "usage-log");
+    private readonly string LogDir;
 
     private static readonly JsonSerializerOptions WriteOpts = new()
     {
@@ -42,9 +40,15 @@ public sealed class UsageLog
     private readonly ILogger<UsageLog> _logger;
     private readonly object _writeLock = new();
 
-    public UsageLog(ILogger<UsageLog> logger) => _logger = logger;
+    public UsageLog(ILogger<UsageLog> logger) : this(logger, MonthlyUsageFiles.DefaultDirectory) { }
 
-    private static string FilePathFor(DateTimeOffset utc) =>
+    public UsageLog(ILogger<UsageLog> logger, string directory)
+    {
+        _logger = logger;
+        LogDir = directory;
+    }
+
+    private string FilePathFor(DateTimeOffset utc) =>
         Path.Combine(LogDir, $"{utc.UtcDateTime:yyyy-MM}.jsonl");
 
     // Append one sample. Called only on a SUCCESSFUL poll (never on failure). The whole
@@ -60,7 +64,8 @@ public sealed class UsageLog
             // in one call so an interrupted write can at worst leave a trailing partial
             // line -- never a half-overwritten earlier line. Append mode + a process-wide
             // lock keeps concurrent writes from interleaving.
-            var bytes = Encoding.UTF8.GetBytes(json + "\n");
+            // A leading separator also isolates any torn final line from an earlier crash.
+            var bytes = Encoding.UTF8.GetBytes("\n" + json + "\n");
 
             lock (_writeLock)
             {
@@ -84,20 +89,9 @@ public sealed class UsageLog
         var samples = new List<LoggedSample>();
         if (to < from) return samples;
 
-        foreach (var path in MonthlyFilesBetween(from, to))
+        foreach (var path in MonthlyUsageFiles.Between(LogDir, from, to))
         {
-            if (!File.Exists(path)) continue;
-
-            IEnumerable<string> lines;
-            try { lines = File.ReadLines(path); }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("Usage-log read failed for {Path} ({Type}); skipped.",
-                    Path.GetFileName(path), ex.GetType().Name);
-                continue;
-            }
-
-            foreach (var line in lines)
+            foreach (var line in MonthlyUsageFiles.Lines(path))
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 if (TryParseLine(line, from, to, out var sample))
@@ -105,8 +99,23 @@ public sealed class UsageLog
             }
         }
 
-        samples.Sort((a, b) => a.Time.CompareTo(b.Time));
-        return samples;
+        return samples.GroupBy(sample => sample.Time).Select(group => group.Last())
+            .OrderBy(sample => sample.Time).ToArray();
+    }
+
+    public DateTimeOffset? Earliest()
+    {
+        // Re-read after reset rather than retaining a stale in-memory earliest timestamp.
+        foreach (var path in MonthlyUsageFiles.All(LogDir))
+        {
+            DateTimeOffset? earliest = null;
+            foreach (var line in MonthlyUsageFiles.Lines(path))
+                if (TryParseLine(line, DateTimeOffset.MinValue, DateTimeOffset.MaxValue, out var sample) &&
+                    (sample.Utilizations.ContainsKey("five_hour") || sample.Utilizations.ContainsKey("seven_day")) &&
+                    (earliest is null || sample.Time < earliest)) earliest = sample.Time;
+            if (earliest is not null) return earliest;
+        }
+        return null;
     }
 
     // Returns the most recently persisted sample as a full UsageData (windows WITH resets_at,
@@ -127,26 +136,18 @@ public sealed class UsageLog
 
             for (var i = files.Length - 1; i >= 0; i--) // newest month first
             {
-                string? lastLine = null;
-                try
+                UsageData? latest = null;
+                foreach (var line in MonthlyUsageFiles.Lines(files[i]))
                 {
-                    foreach (var line in File.ReadLines(files[i]))
-                        if (!string.IsNullOrWhiteSpace(line)) lastLine = line;
+                    try
+                    {
+                        var data = JsonSerializer.Deserialize<UsageData>(line, ReadOpts);
+                        if (data?.Windows is not null && data.FetchedAt != default &&
+                            (latest is null || data.FetchedAt >= latest.FetchedAt)) latest = data;
+                    }
+                    catch (JsonException) { /* keep the newest intact record */ }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning("Usage-log ReadLastSample failed for {Path} ({Type}); skipped.",
-                        Path.GetFileName(files[i]), ex.GetType().Name);
-                    continue;
-                }
-
-                if (lastLine is null) continue;
-                try
-                {
-                    var data = JsonSerializer.Deserialize<UsageData>(lastLine, ReadOpts);
-                    if (data is not null) return data;
-                }
-                catch (JsonException) { /* torn final line -- fall back to older month */ }
+                if (latest is not null) return latest;
             }
             return null;
         }
@@ -166,17 +167,6 @@ public sealed class UsageLog
             if (s.Utilizations.TryGetValue(windowKey, out var util))
                 series.Add(new UsageSample(s.Time, util));
         return series;
-    }
-
-    private static IEnumerable<string> MonthlyFilesBetween(DateTimeOffset from, DateTimeOffset to)
-    {
-        var cursor = new DateTime(from.UtcDateTime.Year, from.UtcDateTime.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var end    = to.UtcDateTime;
-        while (cursor <= end)
-        {
-            yield return Path.Combine(LogDir, $"{cursor:yyyy-MM}.jsonl");
-            cursor = cursor.AddMonths(1);
-        }
     }
 
     private static bool TryParseLine(string line, DateTimeOffset from, DateTimeOffset to, out LoggedSample sample)
@@ -201,8 +191,9 @@ public sealed class UsageLog
                 {
                     if (prop.Value.ValueKind == JsonValueKind.Object
                         && prop.Value.TryGetProperty("utilization", out var u)
-                        && u.ValueKind == JsonValueKind.Number)
-                        utils[prop.Name] = u.GetDouble();
+                        && u.ValueKind == JsonValueKind.Number && u.TryGetDouble(out var value)
+                        && double.IsFinite(value) && value >= 0)
+                        utils[prop.Name] = value;
                 }
             }
 

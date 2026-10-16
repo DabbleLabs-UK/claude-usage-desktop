@@ -512,6 +512,8 @@ public partial class App : Application
         // fault can never disturb the Claude services above.
         builder.Services.AddSingleton<CodexUsageState>();
         builder.Services.AddSingleton<CodexUsageService>();
+        builder.Services.AddSingleton(new CodexQuotaLog(MonthlyUsageFiles.DefaultDirectory,
+            CodexUsageService.CurrentAccountHash));
         builder.Services.AddSingleton<CodexCreditHistory>();
         builder.Services.AddSingleton<CodexPoller>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CodexPoller>());
@@ -600,39 +602,18 @@ public partial class App : Application
         app.MapGet("/api/openrouter-spend", (OpenRouterSpendState state) => Results.Ok(state.Current));
         app.MapGet("/api/agent-spend", () => Results.StatusCode(410));
 
-        // Cumulative usage series for the stats graph. range = 1d | 7d | 30d (default 1d).
-        // Returns the SESSION (five_hour) and WEEK (seven_day) series, each computed from
-        // the logged samples in range via the cumulative-positive-delta calculator. Points
-        // are { t: UTC ISO, v: cumulative % }. hasData is false when nothing is logged yet.
-        app.MapGet("/api/usage-log", (UsageLog log, string? range) =>
+        // Both providers use the same explicit window so historical comparisons stay aligned.
+        app.MapGet("/api/usage-log", (UsageLog log, string? range, string? end) =>
         {
-            var span = range switch
-            {
-                "30d" => TimeSpan.FromDays(30),
-                "7d"  => TimeSpan.FromDays(7),
-                _     => TimeSpan.FromDays(1),
-            };
-
-            var now     = DateTimeOffset.UtcNow;
-            var samples = log.ReadRange(now - span, now);
-
-            static object[] ToPoints(List<CumulativePoint> pts) =>
-                pts.Select(p => (object)new
-                {
-                    t = p.Time.ToUniversalTime().ToString("o"),
-                    v = p.Cumulative,
-                }).ToArray();
-
-            var session = CumulativeUsage.Compute(UsageLog.SeriesFor(samples, "five_hour"));
-            var week    = CumulativeUsage.Compute(UsageLog.SeriesFor(samples, "seven_day"));
-
-            return Results.Ok(new
-            {
-                hasData = samples.Count > 0,
-                range   = range ?? "1d",
-                session = ToPoints(session),
-                week    = ToPoints(week),
-            });
+            if (!StatsWindow.TryResolve(range, end, DateTimeOffset.UtcNow, out var window))
+                return Results.BadRequest(new { message = "Use range 1d, 7d or 30d and an ISO end timestamp with timezone." });
+            return Results.Ok(StatsHistory.Claude(log, window));
+        });
+        app.MapGet("/api/codex/usage-log", (CodexQuotaLog log, string? range, string? end) =>
+        {
+            if (!StatsWindow.TryResolve(range, end, DateTimeOffset.UtcNow, out var window))
+                return Results.BadRequest(new { message = "Use range 1d, 7d or 30d and an ISO end timestamp with timezone." });
+            return Results.Ok(StatsHistory.Codex(log, window));
         });
 
         app.MapGet("/api/settings", (SettingsService settings) =>
