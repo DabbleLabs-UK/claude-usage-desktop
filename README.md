@@ -73,6 +73,12 @@ card separately. Missing readings, long gaps and reset changes can leave Codex
 usage uncounted; sparse or empty periods are shown explicitly. **Clear data ->
 Usage logs** removes both providers' history.
 
+If either provider is unavailable, a compact shared status row identifies which
+one needs attention without obscuring the other provider's graphs. Expand its
+status for the last successful reading, diagnostics and recovery controls.
+Unavailable readings do not establish that a subscription has expired. The
+graph explanations are grouped under **About these graphs**.
+
 ### Phone / tablet access
 
 Open **Settings** (gear icon in the toolbar) to see the LAN URL and QR code.
@@ -101,7 +107,7 @@ cloud service, or credential copying is involved.
    you trust.
 4. On the viewing PC, add this to `%APPDATA%\ClaudeUsage\settings.json`
    (substitute the relay PC's LAN name or IP). Changes load on the next poll,
-   or immediately using the warning banner's Retry now button:
+   or immediately using **Retry now** inside the expanded Claude status:
 
    ```json
    {

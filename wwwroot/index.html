@@ -15,6 +15,7 @@
   <script src="credits-card.js"></script>
   <script src="card-layout.js"></script>
   <script src="usage-stats.js"></script>
+  <script src="provider-status.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -392,61 +393,37 @@
     }
     .update-banner a:hover { text-decoration: underline; }
 
-    /* Backoff status banner -- visible while polling is backed off */
-    /* Calm auth/connection banner. Default tone is a quiet info strip (no alarm
-       colours); the "action" modifier adds a gentle amber accent for the one case
-       that needs the user to do something. All backoff internals live behind the
-       "What's this?" explainer, never on the surface. */
+    /* Shared, compact provider status. Native disclosures keep diagnostics off the surface. */
     .backoff-banner {
       flex-shrink: 0;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px 16px;
+      padding: 5px 16px;
+      max-height: 40dvh;
+      overflow-y: auto;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
-      border-left: 3px solid var(--accent);
-      padding: 8px 16px 9px;
     }
-    .backoff-banner.backoff-action {
-      border-left-color: var(--yellow);
+    .provider-status-entry { min-width: 0; font-size: 0.70rem; color: var(--dim); }
+    .provider-status-summary { cursor: pointer; line-height: 1.6; }
+    .provider-status-problem > summary { color: var(--text); }
+    .provider-status-body { line-height: 1.45; padding: 2px 0 5px; overflow-wrap: anywhere; }
+    .provider-status-body p { margin: 5px 0; }
+    .provider-status-diagnostic { white-space: pre-wrap; }
+    .provider-status-controls { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; }
+    .provider-status-button {
+      background: none; border: none; padding: 0; color: var(--accent);
+      font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
     }
-    .backoff-banner-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
+    .provider-status-button:disabled { opacity: 0.6; cursor: default; }
+    @media (max-width: 320px) {
+      .backoff-banner { grid-template-columns: minmax(0, 1fr); }
     }
-    .backoff-banner-title {
-      font-size: 0.80rem;
-      font-weight: 600;
-      color: var(--text);
-    }
-    /* "What's this?" affordance -- a quiet inline link, not a button-looking thing */
-    .backoff-whatsthis {
-      flex-shrink: 0;
-      background: none;
-      border: none;
-      padding: 0;
-      font: inherit;
-      font-size: 0.70rem;
-      color: var(--accent);
-      cursor: pointer;
-      text-decoration: underline;
-      text-underline-offset: 2px;
-      white-space: nowrap;
-    }
-    .backoff-whatsthis:hover { opacity: 0.82; }
-    /* Inline expanding explanation -- plain language, the ONLY place any detail lives */
-    .backoff-explain {
-      font-size: 0.72rem;
-      line-height: 1.45;
-      color: var(--dim);
-      margin-top: 6px;
-      max-width: 60ch;
-    }
-    .backoff-explain strong { color: var(--text); font-weight: 600; }
-    .backoff-stale-info {
-      font-size: 0.65rem;
-      color: var(--muted);
-      margin-top: 5px;
-    }
+    .backoff-stale-info { font-size: 0.65rem; color: var(--muted); margin-top: 5px; }
+    /* Statistics has per-provider freshness in the strip; retain the separate connection warning. */
+    #statsView:not(.hidden) ~ .toolbar #updatedEl,
+    #statsView:not(.hidden) ~ .toolbar #staleEl { display: none; }
 
     /* BACKEND_GONE: the desktop app process itself is unreachable (Kestrel down), not just a
        dropped SignalR channel -- forceRecovery()'s own HTTP fetches have failed repeatedly.
@@ -504,19 +481,6 @@
       color: var(--text);
     }
     /* ---- Codex lane ---- */
-    /* Independent Codex banner -- a calm info strip; amber accent only when action is needed.
-       Kept entirely separate from the Claude backoff banner (different failure domain). */
-    .codex-banner {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--accent);
-      border-radius: 9px;
-      padding: 8px 12px;
-      font-size: 0.76rem;
-      color: var(--text);
-    }
-    .codex-banner.codex-action { border-left-color: var(--yellow); }
-    .codex-banner strong { font-weight: 700; }
     /* Codex credits balance -- same shape as the Claude billing card. */
     .codex-credits {
       display: flex;
@@ -1272,23 +1236,20 @@
   Desktop app not running -- data shown was last updated <span id="backendGoneElapsed">a while</span> ago
 </div>
 
-<div id="backoffBanner" class="backoff-banner hidden">
-  <div class="backoff-banner-head">
-    <span class="backoff-banner-title" id="backoffTitle"></span>
-    <button type="button" class="backoff-whatsthis" onclick="retryUsage(this)">Retry now</button>
-    <button type="button" class="backoff-whatsthis" id="backoffWhatsThis" onclick="toggleBackoffExplain()">What&rsquo;s this?</button>
-  </div>
-  <div class="backoff-explain hidden" id="backoffExplain"></div>
-  <div class="backoff-stale-info" id="sourceFailureDetail"></div>
-  <div class="backoff-stale-info hidden" id="backoffStaleInfo"></div>
+<div id="backoffBanner" class="backoff-banner hidden" aria-label="Provider usage status">
+  <details class="provider-status-entry">
+    <summary class="provider-status-summary">Provider status display unavailable</summary>
+    <p>Reload the page to restore status details. Saved usage and Statistics remain available.</p>
+    <button type="button" class="provider-status-button" onclick="forceRecovery('provider status', false)">Refresh status</button>
+  </details>
 </div>
 
-<div id="usageInfo" class="usage-info" hidden>
-  <span id="usageSource" class="backoff-stale-info" aria-live="polite"></span>
-  <button id="untrackedToggle" class="untracked-toggle" type="button" onclick="toggleUntracked()" hidden></button>
-</div>
 <link rel="stylesheet" href="card-layout.css">
 <main id="mainView">
+  <div id="usageInfo" class="usage-info" hidden>
+    <span id="usageSource" class="backoff-stale-info" aria-live="polite"></span>
+    <button id="untrackedToggle" class="untracked-toggle" type="button" onclick="toggleUntracked()" hidden></button>
+  </div>
   <div id="layoutStatus" role="status" aria-live="polite"></div>
   <div id="dashboardCards"></div>
   <!-- Two independent columns: Claude (left/top) and Codex (right/bottom). At a wide viewport
@@ -1454,8 +1415,11 @@
     <div class="chart-title" id="codexStatsTitle">Codex usage</div>
     <div id="codexStatsChart" class="chart-area" role="region" aria-labelledby="codexStatsTitle" aria-live="polite"></div>
   </div>
-  <div class="chart-note">Lines show cumulative observed percentage-point increases (pp), not credits. Each line has its own vertical scale, so line heights cannot be compared directly. Gaps while the app is off or samples are missing are unknown, not zero usage. This is observed history, not complete account usage.</div>
-  <div class="chart-note">Codex history starts with this update and is specific to the current account. Each reported quota window has its own line; a weekly line requires the account to report a weekly window.</div>
+  <details class="chart-note">
+    <summary>About these graphs</summary>
+      <p>Lines show cumulative observed percentage-point increases (pp), not credits. Each line has its own vertical scale, so line heights cannot be compared directly. Gaps while the app is off or samples are missing are unknown, not zero usage. This is observed history, not complete account usage.</p>
+      <p>Codex history starts with this update and is specific to the current account. Each reported quota window has its own line; a weekly line requires the account to report a weekly window.</p>
+  </details>
 </div>
 
 <div id="agentSpendDetailView" class="detail-view hidden">
@@ -2155,18 +2119,6 @@
     return { label: 'Usage', compact: 'Usage' };
   }
 
-  // Independent Codex banner text by state. Returns null when live (no banner). Deliberately says
-  // NOTHING about ChatGPT chat limits -- this lane measures Codex agentic usage only.
-  function _codexBannerText(state) {
-    if (state === 'signedOut')
-      return { action: true, text: 'Codex login expired &mdash; run <strong>codex login</strong> in the Codex CLI to resume usage tracking.' };
-    if (state === 'noNetwork')
-      return { action: false, text: "Can't reach Codex right now &mdash; will retry automatically." };
-    if (state === 'error')
-      return { action: false, text: 'Codex usage is temporarily unavailable &mdash; will retry automatically.' };
-    return null;
-  }
-
   const dashboardLayout = CardLayout.attach(document.getElementById('dashboardCards'),
     document.getElementById('rearrangeBtn'), document.getElementById('layoutStatus'));
 
@@ -2183,10 +2135,11 @@
   }
 
   function renderCodex() {
+    renderProviderStatus();
     const col = document.getElementById('codexCol');
     const st = _codexStatus ? _codexStatus.state : null;
-    // No Codex login (or nothing known yet and no data) -> hide the entire section, no placeholder.
-    if (st === 'noToken' || (st === null && !_codexData)) {
+    // With no reading yet, omit the lane. Existing readings remain visible as stale cards.
+    if ((st === 'noToken' || st === null) && !_codexData) {
       col.classList.add('hidden');
       col.innerHTML = '';
       _codexCardDataMap = {};
@@ -2196,10 +2149,6 @@
     col.classList.remove('hidden');
 
     let html = '';
-
-    // Codex's own banner (auth/connectivity), independent of the Claude backoff banner.
-    const b = _codexBannerText(st);
-    if (b) html += '<div class="codex-banner' + (b.action ? ' codex-action' : '') + '">' + b.text + '</div>';
 
     _codexCardDataMap = {};
     const data = _codexData;
@@ -2219,7 +2168,7 @@
         card(key, cw, windowMs || null, compact, true, false, null, 'Codex'), !!(data.isStale || st !== 'live'));
     }
     if (!windows.length && st === 'live')
-      html += '<div class="card dim"><div class="reset">No Codex usage reported yet this period.</div></div>';
+      html += '<div class="card dim"><div class="reset">No Codex quota reported by the latest reading.</div></div>';
 
     const creditCard = CreditsCard.render(data ? { ...data, isStale: data.isStale || st !== 'live' } : null);
     if (creditCard) html += dashboardCard('codex:credits', 'Codex', creditCard, !!(data.isStale || st !== 'live'));
@@ -2593,147 +2542,33 @@
       }
     }
     _checkToolbarOverflow();
-    document.getElementById('mainView').classList.toggle('stale-mode', !!(_backoffState && _lastGoodData));
+    document.getElementById('mainView').classList.toggle('stale-mode', !!data.isStale || !!(_backoffState && _backoffState.state !== 'live' && _lastGoodData));
+    renderProviderStatus();
   }
 
   setInterval(() => { if (lastData) render(lastData); if (_agentSpendData) renderAgentSpend(); }, 60000);
 
-  // ---- Backoff status banner ----
-
-  // Map the raw auth/cooldown state to CALM, plain-language banner content. No "token",
-  // "OAuth", "429", "backoff", "×2" or interval numbers ever reach the surface — those
-  // internals are gone; the explainer only ever speaks of the Claude "login". Cases are chosen
-  // from the typed ConnectivityState the poller sends (+ failure count for the auth ramp):
-  //   noNetwork                  -> offline; reconnects when the connection returns (auto)
-  //   rateLimited                -> waiting on Claude Code to refresh the login (auto)
-  //   signedOut                  -> DEAD login (server-classified); needs the user to /login
-  //   authError, first few misses-> login briefly lapsed, reconnecting (auto)
-  //   authError, persistent      -> login expired, needs the user to sign in again
-  const AUTH_RECONNECT_GRACE = 2;   // first couple of auth misses are treated as transient
-
-  function _authBannerContent() {
-    const s = _backoffState || {};
-    const t = s.state;
-    if (t === 'sourcesUnavailable') {
-      return {
-        action: false,
-        title: 'Waiting for a usage source - retrying automatically',
-        explain: 'The source status below identifies which connection needs attention. '
-          + 'If a remote computer is asleep, wake it; if its relay stopped, restart the relay. '
-          + 'Running Claude on one computer does not renew the sign-in on another. '
-          + 'The last reading stays visible until a source supplies fresh data.',
-      };
+  // ---- Provider status presentation (no provider polling or authentication changes) ----
+  let _providerStatusView = null;
+  function renderProviderStatus() {
+    const banner = document.getElementById('backoffBanner');
+    // A missing optional presentation asset must not abort toolbar/Settings initialization.
+    if (typeof ProviderStatus === 'undefined') {
+      banner.classList.toggle('hidden', _uiConnLost);
+      return;
     }
-
-    // OFFLINE — local connectivity loss (no network, DNS/route failure, timeout). Not a server
-    // or sign-in problem; it reconnects on its own the moment the connection is back.
-    if (t === 'noNetwork') {
-      return {
-        action: false,
-        title: 'Offline — will reconnect when your connection returns',
-        explain:
-            'Claude Usage can’t reach the internet right now, so it can’t fetch fresh numbers. '
-          + '<strong>There’s nothing you need to do</strong> — it reconnects automatically as soon '
-          + 'as your connection is back, and your numbers update on their own. The figures below are '
-          + 'the last ones it saw, shown dimmed.',
-      };
+    if (!_providerStatusView) {
+      _providerStatusView = ProviderStatus.attach(banner, {
+        retry: button => window.retryUsage(button),
+        refresh: () => forceRecovery('provider status', false)
+      });
     }
-
-    // RATE-LIMITED — the app deliberately paused and is waiting for the Claude login to refresh.
-    // The explainer adapts to the autoRefreshLogin setting: ON → the app refreshes the login for
-    // you automatically; OFF → it won't shell out to Claude, so tell the user how to refresh by hand.
-    if (t === 'rateLimited') {
-      return {
-        action: false,
-        title: _autoRefreshLogin
-          ? 'Waiting on Claude Code to refresh the login'
-          : 'Your Claude login needs refreshing',
-        explain: _autoRefreshLogin
-          ? (
-              'Claude Code refreshes your sign-in from time to time. To stay out of its way, '
-            + 'Claude Usage has paused for a moment. <strong>There’s nothing you need to do</strong> — '
-            + 'automatic login refresh is on, so the app makes a tiny check-in to Claude to refresh '
-            + 'your login for you, and your numbers update on their own. The figures below are the '
-            + 'last ones it saw.'
-            )
-          : (
-              'Claude Usage has paused for a moment while your Claude sign-in needs refreshing. '
-            + '<strong>Automatic login refresh is turned off</strong>, so to update now open Claude '
-            + 'Code (or run any <em>claude</em> command) — Claude Usage picks the refreshed sign-in '
-            + 'up on its own, no restart needed. You can switch automatic refresh back on in Settings. '
-            + 'The figures below are the last ones it saw.'
-            ),
-      };
-    }
-
-    // SIGNED OUT — a DEAD login: the saved sign-in has fully lapsed (not just due for a refresh),
-    // so neither Claude Code's own CLI refresh nor this app's refresh can bring it back on their
-    // own. Nothing is coming; be honest about it rather than showing the "waiting" banner above.
-    if (t === 'signedOut') {
-      return {
-        action: true,
-        title: 'Claude sign-in on this PC needs attention',
-        explain:
-            '<strong>What happened:</strong> the Claude sign-in saved on this PC has fully lapsed — '
-          + 'this isn’t a brief refresh wait, it’s actually signed out. Claude Usage can’t fetch '
-          + 'fresh numbers until you sign in again. The figures below are paused and shown '
-          + 'dimmed.<br><br>'
-          + '<strong>What to do:</strong> run <code>/login</code> in Claude Code (or open Claude '
-          + 'Code and sign in) to reconnect. Claude Usage picks the refreshed sign-in up '
-          + 'automatically — no restart needed.<br><br>'
-          + (_autoRefreshLogin
-              ? ('<strong>Why it’s not fixing itself:</strong> automatic login refresh is on, but '
-               + 'it can only refresh a login that’s still alive — this one has fully lapsed, so '
-               + 'only signing in again will fix it.')
-              : ('<strong>Automatic login refresh is turned off</strong>, and even with it on this '
-               + 'couldn’t fix a fully lapsed login — only signing in again will.')),
-      };
-    }
-
-    // LAPSED, likely automatic — a brief loss of the sign-in; give it a chance to come back.
-    if (t === 'authError' && (s.consecutiveFailures || 0) <= AUTH_RECONNECT_GRACE) {
-      return {
-        action: false,
-        title: 'Reconnecting to Claude…',
-        explain:
-            'Claude Usage reads the same Claude sign-in that Claude Code uses on this PC. It '
-          + 'briefly lost that sign-in and is reconnecting. '
-          + '<strong>This usually clears on its own in a moment.</strong> Your numbers are paused '
-          + '(shown dimmed) until it does.',
-      };
-    }
-
-    // LAPSED, needs action — the sign-in has expired and won't return without the user. Tell
-    // them plainly what happened, how it affects them, what to DO, and why the app needs it.
-    if (t === 'authError') {
-      return {
-        action: true,
-        title: 'Cannot refresh usage on this PC',
-        explain:
-            '<strong>What happened:</strong> this PC could not fetch a fresh reading. '
-          + 'Its saved sign-in may need attention. The figures below are paused and shown '
-          + 'dimmed.<br><br>'
-          + '<strong>What to do:</strong> open Claude Code (or run any <em>claude</em> command) to '
-          + 'sign in again. Claude Usage picks the refreshed sign-in up automatically — no '
-          + 'restart needed.<br><br>'
-          + '<strong>Why it needs this:</strong> Claude Usage reads the same Claude sign-in already '
-          + 'on your PC to look up your usage. It never sees your password, and nothing leaves this '
-          + 'computer.',
-      };
-    }
-
-    // Fallback (unknown/unmapped state) — keep it reassuring and correct.
-    return {
-      action: false,
-      title: 'Reconnecting to Claude…',
-      explain:
-          'Claude Usage hit a snag reaching your usage and is trying again. '
-        + '<strong>This usually clears on its own.</strong> The numbers below are the last ones it '
-        + 'saw, shown dimmed until it reconnects.',
-    };
+    _providerStatusView.update([
+      ProviderStatus.derive('Claude', { status: _backoffState, data: lastData || _lastGoodData, autoRefreshLogin: _autoRefreshLogin }),
+      ProviderStatus.derive('Codex', { status: _codexStatus, data: _codexData })
+    ], _uiConnLost);
   }
 
-  let _explainOpen   = false;
   window.retryUsage = async function(button) {
     button.disabled = true;
     try {
@@ -2742,89 +2577,30 @@
     } catch (_) { button.textContent = 'Desktop unreachable'; }
     setTimeout(function() { button.disabled = false; button.textContent = 'Retry now'; }, 15000);
   };
-  let _lastBannerKey = null;   // so the 1s tick doesn't clobber the open explainer's text
-
-  function toggleBackoffExplain() {
-    _explainOpen = !_explainOpen;
-    const ex  = document.getElementById('backoffExplain');
-    const btn = document.getElementById('backoffWhatsThis');
-    if (ex)  ex.classList.toggle('hidden', !_explainOpen);
-    if (btn) btn.textContent = _explainOpen ? 'Hide' : 'What’s this?';
-  }
-  window.toggleBackoffExplain = toggleBackoffExplain;
-
-  function _collapseBackoffExplain() {
-    _explainOpen = false;
-    const ex  = document.getElementById('backoffExplain');
-    if (ex)  ex.classList.add('hidden');
-    const btn = document.getElementById('backoffWhatsThis');
-    if (btn) btn.textContent = 'What’s this?';
-  }
 
   function updateBackoffBanner() {
-    const banner = document.getElementById('backoffBanner');
-    const si = document.getElementById('backoffStaleInfo');
     const mv = document.getElementById('mainView');
-    // HONESTY GUARD: while the watchdog has declared the live link lost, the backoff banner would
-    // be showing whatever state the now-dead channel last delivered -- e.g. a "signed out" that is
-    // no longer true. The reconnecting pill is the honest indicator for that case, so suppress the
-    // backoff banner entirely until a fresh /api/backoff re-fetch clears _uiConnLost. (The per-second
-    // ticker calls this too, so without the guard it would keep re-showing the stale banner.)
+    // Preserve the watchdog honesty boundary: cached provider state is hidden while disconnected.
     if (_uiConnLost) {
-      banner.classList.add('hidden');
-      banner.classList.remove('backoff-action');
-      if (si) si.classList.add('hidden');
+      renderProviderStatus();
       return;
     }
-    if (!_backoffState) {
-      banner.classList.add('hidden');
-      banner.classList.remove('backoff-action');
-      if (si) si.classList.add('hidden');
-      if (mv) mv.classList.remove('stale-mode');
-      _collapseBackoffExplain();
-      _lastBannerKey = null;
-      return;
-    }
-    banner.classList.remove('hidden');
-
-    // Keep the dimmed last-known data + "stale — last updated HH:MM" visible underneath
-    // (unchanged behaviour). If we have cached good data and the view is blank or still
-    // loading, render it dimmed.
-    if (_lastGoodData && mv && (!lastData || mv.querySelector('.loading'))) {
-      render(_lastGoodData);
-    }
-    if (_lastGoodData && mv) {
-      mv.classList.add('stale-mode');
-      if (si) {
-        si.textContent = 'stale — last updated ' +
-          new Date(_lastGoodData.fetchedAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-        si.classList.remove('hidden');
-      }
-    } else if (!lastData) {
-      // No cache at all — clear the Claude column's loading text so the banner is the sole
-      // indicator. Clear ONLY the Claude column, never mainView (that would drop the Codex column).
-      const cc = document.getElementById('claudeCol');
-      if (cc && cc.querySelector('.loading')) cc.innerHTML = '';
-      if (si) si.classList.add('hidden');
-    }
-
-    // Calm, cause-adapted surface text. Only rebuild when the case actually changes, so the
-    // per-second tick can't interrupt reading/selecting the open explainer.
-    const c = _authBannerContent();
-    document.getElementById('sourceFailureDetail').textContent = _backoffState.detail || '';
-    const key = c.title + '|' + (c.action ? 'a' : 'c') + '|' + (_autoRefreshLogin ? 'ar1' : 'ar0');
-    if (key !== _lastBannerKey) {
-      _lastBannerKey = key;
-      banner.classList.toggle('backoff-action', !!c.action);
-      document.getElementById('backoffTitle').textContent = c.title;
-      const ex = document.getElementById('backoffExplain');
-      if (ex) {
-        ex.innerHTML = c.explain;
-        ex.classList.toggle('hidden', !_explainOpen);
+    const waiting = _backoffState && _backoffState.state !== 'live';
+    if (!waiting) {
+      if (mv) mv.classList.toggle('stale-mode', !!(lastData && lastData.isStale));
+    } else {
+      // Keep last-known Claude cards, without affecting Codex or saved Statistics.
+      if (_lastGoodData && mv && (!lastData || mv.querySelector('.loading'))) render(_lastGoodData);
+      if (_lastGoodData && mv) mv.classList.add('stale-mode');
+      else if (!lastData) {
+        const cc = document.getElementById('claudeCol');
+        if (cc && cc.querySelector('.loading')) cc.innerHTML = '';
       }
     }
+    renderProviderStatus();
   }
 
+  renderProviderStatus();
   setInterval(function() { if (_backoffState) updateBackoffBanner(); }, 1000);
 
   // The SignalR client is loaded from a public CDN (see <script> above). A phone that can
