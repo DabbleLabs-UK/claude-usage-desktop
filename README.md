@@ -79,6 +79,19 @@ status for the last successful reading, diagnostics and recovery controls.
 Unavailable readings do not establish that a subscription has expired. The
 graph explanations are grouped under **About these graphs**.
 
+Codex access rejections are not proof of an expired subscription or a need to
+sign in again. Expanded status distinguishes an expired local token from HTTP
+401/403 rejection, and shows the last and approximate next automatic check.
+CU still checks Codex about every three minutes without refreshing credentials.
+**Refresh status** acknowledges the click and rereads only CU's cached state;
+it does not force a new provider request or bypass that interval.
+
+Codex's last-known home cards are kept for the current app session, not restored
+after restarting CU. Saved quota and credit histories remain on disk; Statistics
+can show recorded quota usage even while a new reading is unavailable. The older
+Claude reading shown after restart is an independent Claude snapshot, not a
+fallback source for Codex. The footer labels its Claude timestamp explicitly.
+
 ### Phone / tablet access
 
 Open **Settings** (gear icon in the toolbar) to see the LAN URL and QR code.

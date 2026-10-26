@@ -23,25 +23,34 @@ public sealed class CodexUsageService
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
 
     public sealed record CodexResult(CodexState State, CodexUsageData? Data, string Source, string Detail,
-        string? AccountHash = null);
+        string? AccountHash = null, CodexFailureReason? Reason = null, int? HttpStatusCode = null);
 
     public static string? CurrentAccountHash() => HashAccount(CodexCredentialStore.Resolve(out _)?.AccountId);
 
     private static string? HashAccount(string? accountId) => string.IsNullOrWhiteSpace(accountId) ? null
         : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(accountId)));
 
-    public async Task<CodexResult> FetchAsync()
+    public Task<CodexResult> FetchAsync()
     {
         var creds = CodexCredentialStore.Resolve(out var source);
+        return FetchAsync(creds, source, _http);
+    }
+
+    // Test the existing read-only request path with synthetic credentials and an in-memory handler.
+    internal static async Task<CodexResult> FetchAsync(CodexCredentialStore.CodexCreds? creds,
+        string source, HttpClient http)
+    {
         if (creds is null)
-            return new CodexResult(CodexState.NoToken, null, "none", "no Codex login found");
+            return new CodexResult(CodexState.NoToken, null, "none", "no Codex login found",
+                Reason: CodexFailureReason.NoLocalCredentials);
 
         // Read-only expiry short-circuit: if the cached token is already expired we do NOT call the
         // endpoint (a guaranteed 401) and, above all, NEVER refresh -- Codex owns that. Surface an
         // honest signed-out so the user re-auths via the Codex CLI. Unknown expiry (opaque token,
         // exp == 0) falls through to the live call.
         if (creds.ExpiresAtMs > 0 && creds.ExpiresAtMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-            return new CodexResult(CodexState.SignedOut, null, source, "cached Codex token expired");
+            return new CodexResult(CodexState.SignedOut, null, source, "cached Codex token expired",
+                Reason: CodexFailureReason.LocalTokenExpired);
 
         try
         {
@@ -51,12 +60,17 @@ public sealed class CodexUsageService
             if (!string.IsNullOrEmpty(creds.AccountId))
                 request.Headers.Add("ChatGPT-Account-Id", creds.AccountId);
 
-            using var response = await _http.SendAsync(request);
+            using var response = await http.SendAsync(request);
 
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                return new CodexResult(CodexState.SignedOut, null, source, $"HTTP {(int)response.StatusCode} from usage endpoint");
+                return new CodexResult(CodexState.SignedOut, null, source,
+                    $"HTTP {(int)response.StatusCode} from usage endpoint",
+                    Reason: response.StatusCode == HttpStatusCode.Unauthorized
+                        ? CodexFailureReason.UsageUnauthorized : CodexFailureReason.UsageForbidden,
+                    HttpStatusCode: (int)response.StatusCode);
             if (!response.IsSuccessStatusCode)
-                return new CodexResult(CodexState.Error, null, source, $"HTTP {(int)response.StatusCode} from usage endpoint");
+                return new CodexResult(CodexState.Error, null, source,
+                    $"HTTP {(int)response.StatusCode} from usage endpoint", HttpStatusCode: (int)response.StatusCode);
 
             var body = await response.Content.ReadAsStringAsync();
             var data = CodexUsageParser.Parse(body, DateTimeOffset.UtcNow);

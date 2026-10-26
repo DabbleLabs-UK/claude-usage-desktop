@@ -19,12 +19,24 @@
       noToken: ['Not signed in', 'No Codex sign-in was found on this computer. Open Codex or run codex login to sign in.'],
       signedOut: provider === 'Claude'
         ? ['Sign-in needed', 'The Claude sign-in on this computer needs attention. Open Claude Code and sign in, or run /login there. Remote sources have their own sign-ins.']
-        : ['Sign-in/access needed', 'Codex could not use the saved sign-in or access the usage endpoint. Check Codex access and sign in again if needed.']
+        : ['Access unavailable', 'Codex usage access is unavailable. CU cannot determine whether this is a sign-in, account entitlement or temporary access problem.']
     };
     if (state && state !== 'live') {
       const description = descriptions[state] || ['Unavailable', 'The desktop app reported an unrecognized usage status.'];
       label = description[0];
       explanation = description[1];
+      if (provider === 'Codex') {
+        if (status.reason === 'localTokenExpired') {
+          label = 'Sign-in needed';
+          explanation = 'The local token read by CU has expired. CU reads the token without changing it; Codex owns sign-in refresh. Open Codex to check its sign-in.';
+        } else if (status.reason === 'usageUnauthorized' || status.reason === 'usageForbidden') {
+          label = 'Access unavailable';
+          const code = status.reason === 'usageUnauthorized' ? 401 : 403;
+          explanation = 'Usage endpoint rejected access (HTTP ' + code + '). CU cannot determine whether this is a sign-in, account entitlement or temporary access problem.';
+        } else if (state === 'error' && Number.isInteger(status.httpStatusCode)) {
+          explanation = 'A fresh Codex reading could not be fetched (HTTP ' + status.httpStatusCode + '). The desktop app will retry automatically.';
+        }
+      }
     } else if (stale) {
       label = 'Stale';
       explanation = 'The last reading is available, but fresh usage has not been confirmed.';
@@ -41,10 +53,15 @@
     };
     const fetched = dateText(data && data.fetchedAt);
     const freshness = fetched ? 'Last successful reading: ' + fetched + (data.source ? ' (from ' + data.source + ')' : '') + '.'
-      : 'No successful reading is available in this view yet.';
+      : 'No successful reading in this app session. Saved history may still be available in Statistics.';
     const problem = label !== 'Live' && label !== 'No quota reported';
     const retryAt = dateText(status && status.nextAttemptAt);
-    const automatic = provider === 'Claude' && problem && state && state !== 'live'
+    const checkedAt = dateText(status && status.checkedAt);
+    const automatic = provider === 'Codex' && state !== 'live'
+      ? 'Codex usage is checked automatically about every 3 minutes.'
+        + (checkedAt ? ' Last check: ' + checkedAt + '.' : ' No check time is available yet.')
+        + (retryAt ? ' Next check expected around ' + retryAt + '.' : ' The next check time is not available yet.')
+      : provider === 'Claude' && problem && state && state !== 'live'
       ? (retryAt ? 'Next automatic attempt scheduled for ' + retryAt + '.' : 'The desktop app will check again automatically.')
       : '';
     return {
@@ -89,7 +106,25 @@
       const refresh = node('button', 'provider-status-button', 'Refresh status');
       refresh.type = 'button';
       refresh.title = 'Read the latest status cached by the desktop app';
-      refresh.addEventListener('click', () => { if (actions.refresh) actions.refresh(); });
+      const feedback = node('p', 'provider-status-feedback');
+      feedback.setAttribute('role', 'status');
+      feedback.setAttribute('aria-live', 'polite');
+      refresh.addEventListener('click', async () => {
+        if (refresh.disabled) return;
+        refresh.disabled = true;
+        refresh.textContent = 'Checking...';
+        feedback.textContent = 'Checking cached ' + provider + ' status in the desktop app...';
+        try {
+          const result = actions.refresh ? await actions.refresh(provider) : null;
+          feedback.textContent = result && typeof result.ok === 'boolean' && result.message
+            ? result.message : 'Could not check cached ' + provider + ' status.';
+        } catch (_) {
+          feedback.textContent = 'Could not check cached ' + provider + ' status. The desktop app did not return a usable response.';
+        } finally {
+          refresh.disabled = false;
+          refresh.textContent = 'Refresh status';
+        }
+      });
       controls.append(refresh);
       let retry = null;
       if (provider === 'Claude') {
@@ -99,7 +134,7 @@
         retry.addEventListener('click', () => { if (actions.retry) actions.retry(retry); });
         controls.append(retry);
       }
-      body.append(controls);
+      body.append(controls, feedback);
       container.append(details);
       entries[provider] = { details, summary, fields, retry };
     }

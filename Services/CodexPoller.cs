@@ -61,7 +61,9 @@ public sealed class CodexPoller : BackgroundService
             // FetchAsync never throws (it catches its own faults and returns a typed result), so a
             // Codex-lane problem can't bubble up and disturb anything else.
             var result = await _service.FetchAsync();
-            _state.SetStatus(new CodexStatus(result.State));
+            var checkedAt = DateTimeOffset.UtcNow;
+            _state.SetStatus(new CodexStatus(result.State, result.Reason, result.HttpStatusCode,
+                checkedAt, checkedAt.AddSeconds(IntervalSec)));
 
             // NOTE ordering: the hub broadcast happens BEFORE the poll.log write. poll.log is the
             // one thing the two lanes share (a single file + lock), so logging first would let a
@@ -82,7 +84,8 @@ public sealed class CodexPoller : BackgroundService
             {
                 _creditHistory.MarkUnavailable();
                 // Keep the last-known snapshot (dimmed/stale) so a transient miss doesn't blank the
-                // Codex column; NoToken has no snapshot to keep and the UI hides the section.
+                // Codex column. After a process restart Current is empty until the first success;
+                // quota/credit history is not a complete persisted dashboard snapshot.
                 _state.MarkStale();
                 if (_state.Current is { } stale)
                     await _hub.Clients.All.SendAsync("codexUsageUpdated", stale, ct);

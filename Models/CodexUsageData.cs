@@ -42,10 +42,11 @@ public record CodexCreditsHistory(
 
 // Independent connectivity/auth state for the Codex lane -- deliberately NOT the Claude
 // ConnectivityState, so the two can't be confused and a Codex problem stays contained.
-//   NoToken   -- no Codex login found on disk/keystore. The whole Codex section is hidden.
+//   NoToken   -- no Codex login found on disk/keystore. Cached cards may remain stale.
 //   Live      -- last poll succeeded; no banner.
-//   SignedOut -- the cached token is expired, or the endpoint returned 401/403. Codex owns
-//                token refresh (its own CLI); we NEVER refresh -- the user re-auths via `codex`.
+//   SignedOut -- legacy combined state: expired cached token OR usage endpoint 401/403.
+//                Reason distinguishes those observations without inferring subscription status.
+//                Codex owns token refresh; we NEVER refresh or write credentials.
 //   NoNetwork -- local connectivity loss, or the request failed to reach the endpoint / timed out.
 //   Error     -- any other failure (5xx, malformed body, unexpected shape).
 public enum CodexState
@@ -57,5 +58,20 @@ public enum CodexState
     Error,
 }
 
-// Pushed to the UI so the Codex banner can react independently of the Claude banner.
-public record CodexStatus(CodexState State);
+// Safe observations only, not diagnoses inferred from an HTTP rejection or response body.
+public enum CodexFailureReason
+{
+    NoLocalCredentials,
+    LocalTokenExpired,
+    UsageUnauthorized,
+    UsageForbidden,
+}
+
+// No credential source, account identity or upstream body is sent to the UI.
+// The next attempt is approximate: the unchanged delay follows delivery/logging of this result.
+public record CodexStatus(
+    CodexState State,
+    CodexFailureReason? Reason = null,
+    int? HttpStatusCode = null,
+    DateTimeOffset? CheckedAt = null,
+    DateTimeOffset? NextAttemptAt = null);

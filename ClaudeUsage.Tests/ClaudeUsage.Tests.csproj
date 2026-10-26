@@ -21,6 +21,10 @@
     <Compile Include="..\Services\LoginStatePolicy.cs" Link="LoginStatePolicy.cs" />
     <Compile Include="..\Services\ExtraUsageGuard.cs" Link="ExtraUsageGuard.cs" />
     <Compile Include="..\Services\CodexUsageParser.cs" Link="CodexUsageParser.cs" />
+    <Compile Include="..\Services\CodexUsageService.cs" Link="CodexUsageService.cs" />
+    <Compile Include="..\Services\CodexCredentialStore.cs" Link="CodexCredentialStore.cs" />
+    <Compile Include="..\Services\WindowsCredentialStore.cs" Link="WindowsCredentialStore.cs" />
+    <Compile Include="..\Services\CodexUsageState.cs" Link="CodexUsageState.cs" />
     <Compile Include="..\Services\CodexCreditHistory.cs" Link="CodexCreditHistory.cs" />
     <Compile Include="..\Models\UsageData.cs" Link="UsageData.cs" />
     <Compile Include="..\Models\CodexUsageData.cs" Link="CodexUsageData.cs" />

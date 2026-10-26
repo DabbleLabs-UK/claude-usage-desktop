@@ -541,7 +541,8 @@ public partial class App : Application
             {
                 var html = await File.ReadAllTextAsync(Path.Combine(wwwrootPath, "index.html"));
                 html = html.Replace("\"logo_dabblelabs.png\"", $"\"logo_dabblelabs.png?v={assetVer}\"");
-                foreach (var asset in new[] { "card-layout.js", "card-layout.css", "credits-card.js", "credits-card.css" })
+                foreach (var asset in new[] { "card-layout.js", "card-layout.css", "credits-card.js", "credits-card.css",
+                    "provider-status.js", "usage-stats.js" })
                     html = html.Replace($"\"{asset}\"", $"\"{asset}?v={assetVer}\"");
 
                 // Discriminate the embedded desktop WebView2 (loads via localhost -> loopback

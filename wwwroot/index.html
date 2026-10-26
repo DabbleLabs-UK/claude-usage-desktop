@@ -1434,7 +1434,7 @@
   <div class="meta">
     <div class="meta-text">
       <span class="updated" id="updatedEl">--</span>
-      <span class="stale" id="staleEl">Stale</span>
+      <span class="stale" id="staleEl">Claude stale</span>
       <span class="reconnecting-el" id="reconnectingEl">Reconnecting&#x2026;</span>
     </div>
   </div>
@@ -2560,13 +2560,63 @@
     if (!_providerStatusView) {
       _providerStatusView = ProviderStatus.attach(banner, {
         retry: button => window.retryUsage(button),
-        refresh: () => forceRecovery('provider status', false)
+        refresh: provider => refreshProviderStatus(provider)
       });
     }
     _providerStatusView.update([
       ProviderStatus.derive('Claude', { status: _backoffState, data: lastData || _lastGoodData, autoRefreshLogin: _autoRefreshLogin }),
       ProviderStatus.derive('Codex', { status: _codexStatus, data: _codexData })
     ], _uiConnLost);
+  }
+
+  async function refreshProviderStatus(provider) {
+    const paths = provider === 'Claude' ? ['/api/backoff', '/api/usage']
+      : provider === 'Codex' ? ['/api/codex/status', '/api/codex/usage'] : null;
+    if (!paths) return { ok: false, message: 'Unknown provider status.' };
+    const controller = new AbortController();
+    let timedOut = false;
+    let timer;
+    const expired = new Promise(resolve => {
+      timer = setTimeout(function() { timedOut = true; controller.abort(); resolve({ kind: 'failed' }); }, 8000);
+    });
+    async function read(path, index) {
+      try {
+        return await Promise.race([
+          (async function() {
+            const response = await fetch(path, { signal: controller.signal });
+            if (timedOut) return { kind: 'failed' };
+            if (response.status === 404) {
+              _markServerContact(false);
+              return { kind: index === 1 ? 'missing' : 'failed' };
+            }
+            if (!response.ok) return { kind: 'failed' };
+            _markServerContact(false);
+            return { kind: 'value', value: await response.json() };
+          })(), expired
+        ]);
+      } catch (_) { return { kind: 'failed' }; }
+    }
+    let results;
+    try { results = await Promise.all(paths.map(read)); }
+    finally { clearTimeout(timer); }
+    const [status, usage] = results;
+    if (provider === 'Claude') {
+      if (status.kind === 'value') _backoffState = status.value;
+      if (usage.kind === 'value' && usage.value) render(usage.value);
+      updateBackoffBanner();
+    } else {
+      if (status.kind === 'value') _codexStatus = status.value;
+      if (usage.kind === 'value' && usage.value) _codexData = usage.value;
+      renderCodex();
+    }
+    const failures = results.filter(result => result.kind === 'failed').length;
+    const missing = results.some(result => result.kind === 'missing') || (usage.kind === 'value' && usage.value === null);
+    const message = failures === 2
+      ? 'Could not check cached ' + provider + ' status. The desktop app did not return usable responses.'
+      : failures
+        ? 'Partially checked cached ' + provider + ' status; one local response failed. No fresh provider request was made.'
+        : 'Checked cached ' + provider + ' status. No fresh provider request was made.';
+    return { ok: failures === 0, message: message + (missing ? ' No snapshot is available from one local endpoint; existing values were kept.' : '') };
   }
 
   window.retryUsage = async function(button) {
@@ -2647,7 +2697,7 @@
   function _refreshUpdatedEl() {
     const el = document.getElementById('updatedEl');
     if (!el || !_lastFetchedAt) return;
-    el.textContent = 'updated ' + new Date(_lastFetchedAt).toLocaleTimeString()
+    el.textContent = 'Claude updated ' + new Date(_lastFetchedAt).toLocaleTimeString()
       + ' (' + _fmtElapsedSince(Date.now() - _lastFetchedAt) + ')';
   }
 

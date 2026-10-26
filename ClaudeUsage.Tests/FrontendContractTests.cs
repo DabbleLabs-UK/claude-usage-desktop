@@ -30,4 +30,13 @@ public class FrontendContractTests
         Assert.DoesNotContain("Launcher Spend", html);
         Assert.DoesNotContain("<span class=\"label\">API Spend</span>", html);
     }
+
+    [Fact]
+    public void SharedStatusAsset_IsIncludedInExistingVersionedAssetDelivery()
+    {
+        var appSource = File.ReadAllText(Path.Combine(Path.GetDirectoryName(
+            Path.GetDirectoryName(IndexHtmlPath))!, "App.xaml.cs"));
+        Assert.Contains("\"provider-status.js\", \"usage-stats.js\"", appSource);
+        Assert.Contains("html.Replace($\"\\\"{asset}\\\"\", $\"\\\"{asset}?v={assetVer}\\\"\")", appSource);
+    }
 }
