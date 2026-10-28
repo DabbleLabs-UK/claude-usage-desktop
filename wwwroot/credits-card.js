@@ -46,7 +46,7 @@
       + '</span><strong>' + escape(detail) + '</strong>' + pace + '</div>';
   }
 
-  function chart(daily, fetchedAt) {
+  function chart(daily, fetchedAt, now) {
     if (!fetchedAt) return '<p class="credit-history-note">Daily history unavailable</p>';
     const entries = new Map();
     if (Array.isArray(daily)) daily.forEach(function(day) {
@@ -55,29 +55,31 @@
       if (!date || date.toISOString().slice(0, 10) !== day.date) return;
       entries.set(day.date, entries.has(day.date) ? null : (number(day.creditsSpent) ? day.creditsSpent : null));
     });
-    const end = Date.UTC(fetchedAt.getUTCFullYear(), fetchedAt.getUTCMonth(), fetchedAt.getUTCDate());
+    const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const readingDay = fetchedAt.toISOString().slice(0, 10);
     const days = [];
-    for (let i = 7; i > 0; i--) {
+    for (let i = 6; i >= 0; i--) {
       const date = new Date(end - i * 86400000);
       const key = date.toISOString().slice(0, 10);
       days.push({ date: key, label: date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }), spent: entries.get(key) });
     }
     const max = Math.max(1, ...days.filter(d => number(d.spent)).map(d => d.spent));
     return '<div class="credit-history-chart-title">Estimated daily credit spending (UTC)</div>'
-      + '<div class="credit-history-chart" role="list" aria-label="Observed credit spending for the last seven completed UTC days">'
+      + '<div class="credit-history-chart" role="list" aria-label="Observed credit spending for today and the previous six UTC days">'
       + days.map(function(day) {
         const known = number(day.spent);
         const amount = known ? format(day.spent) : '-';
-        const description = day.date + ': ' + (known ? amount + ' credits spent' : 'incomplete or uncertain history');
+        const description = day.date + ': ' + (known ? amount + ' credits spent'
+          + (day.date === readingDay ? ' (so far as of last reading)' : '') : 'incomplete or uncertain history');
         const height = known ? Math.max(day.spent > 0 ? 2 : 0, day.spent / max * 48) : 0;
         return '<div class="credit-history-day" role="listitem" aria-label="' + escape(description) + '">'
           + '<span class="credit-history-value" aria-hidden="true">' + escape(amount) + '</span>'
           + '<span class="credit-history-track" aria-hidden="true"><span class="credit-history-fill" style="height:' + height.toFixed(2) + 'px"></span></span>'
           + '<span class="credit-history-date" aria-hidden="true">' + escape(day.label) + '</span></div>';
-      }).join('') + '</div><p class="credit-history-note">- means incomplete or uncertain history.</p>';
+      }).join('') + '</div><p class="credit-history-note">Today shows spending so far, as of the last reading. - means incomplete or uncertain history.</p>';
   }
 
-  function render(data) {
+  function render(data, now) {
     if (!data || typeof data !== 'object') return '';
     const history = data.creditsHistory && typeof data.creditsHistory === 'object' ? data.creditsHistory : null;
     const balance = data.creditsBalance;
@@ -93,7 +95,7 @@
       + '<div class="credit-history-horizons">'
       + horizon('At last 24h pace', history && history.last24Hours, stale, balance, unlimited)
       + horizon('At last 7 days pace', history && history.last7Days, stale, balance, unlimited) + '</div>'
-      + chart(history && history.daily, fetchedAt)
+      + chart(history && history.daily, fetchedAt, now || new Date())
       + '<p class="credit-history-note">Estimates use observed balance changes; grants, expiry and corrections can affect them.</p>'
       + '<p class="credit-history-freshness">' + (stale ? 'Stale balance; estimates paused. Last updated ' : 'Balance updated ') + stamp + '</p></article>';
   }

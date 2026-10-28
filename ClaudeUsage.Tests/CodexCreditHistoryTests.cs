@@ -16,11 +16,12 @@ public sealed class CodexCreditHistoryTests : IDisposable
         => new([], balance, at ?? Now);
 
     private void Seed(int days, Action<List<CodexCreditHistory.Sample>>? edit = null,
-        double dailySpend = 24)
+        double dailySpend = 24, DateTimeOffset? at = null)
     {
+        var end = at ?? Now;
         var samples = new List<CodexCreditHistory.Sample>();
         for (var i = 0; i < days * 96; i++)
-            samples.Add(new(Now.AddDays(-days).AddMinutes(i * 15), 1000 + days * dailySpend - i * dailySpend / 96));
+            samples.Add(new(end.AddDays(-days).AddMinutes(i * 15), 1000 + days * dailySpend - i * dailySpend / 96));
         edit?.Invoke(samples);
         Directory.CreateDirectory(_directory);
         File.WriteAllText(HistoryPath, JsonSerializer.Serialize(new CodexCreditHistory.HistoryFile(1, Account, samples)));
@@ -39,8 +40,10 @@ public sealed class CodexCreditHistoryTests : IDisposable
         Assert.Equal(168, result.Last7Days.CreditsSpent);
         Assert.Equal(168, result.Last7Days.ObservedHours);
         Assert.Equal(7, result.Daily.Count);
-        Assert.All(result.Daily, day => Assert.Equal(24, day.CreditsSpent));
-        Assert.Equal("2026-10-02", result.Daily[0].Date);
+        Assert.All(result.Daily.Take(6), day => Assert.Equal(24, day.CreditsSpent));
+        Assert.Equal(12, result.Daily[^1].CreditsSpent);
+        Assert.Equal("2026-10-03", result.Daily[0].Date);
+        Assert.Equal("2026-10-09", result.Daily[^1].Date);
 
         var later = Now.AddMinutes(15);
         var reloaded = new CodexCreditHistory(HistoryPath, () => later);
@@ -60,6 +63,63 @@ public sealed class CodexCreditHistoryTests : IDisposable
         Assert.Equal("collecting", result.Last24Hours.Status);
         Assert.Null(result.Last24Hours.EstimatedDaysLeft);
         Assert.All(result.Daily, day => Assert.Null(day.CreditsSpent));
+    }
+
+    [Fact]
+    public void TodayShowsOnlySpendSoFar_AndUpdatesWithTheNextReading()
+    {
+        Seed(8);
+        var clock = Now;
+        var history = new CodexCreditHistory(HistoryPath, () => clock);
+        var first = history.Record(Reading(1000), Account).CreditsHistory!;
+        Assert.Equal(12, first.Daily[^1].CreditsSpent);
+        clock = clock.AddHours(3);
+        var later = history.Record(Reading(997, clock), Account).CreditsHistory!;
+        Assert.Equal(15, later.Daily[^1].CreditsSpent);
+        Assert.Equal(24, later.Last24Hours.CreditsSpent);
+        Assert.Equal(168, later.Last7Days.CreditsSpent);
+    }
+
+    [Fact]
+    public void TodayStopsAtTheFreshReading_NotTheLaterProcessingClock()
+    {
+        Seed(8);
+        var result = new CodexCreditHistory(HistoryPath, () => Now.AddSeconds(1))
+            .Record(Reading(1000), Account).CreditsHistory!;
+        Assert.Equal(12, result.Daily[^1].CreditsSpent);
+        Assert.Equal(24, result.Last24Hours.CreditsPerDay!.Value, 3);
+    }
+
+    [Theory]
+    [InlineData("2026-10-28T16:00:00Z", "2026-10-22", "2026-10-28", 16)]
+    [InlineData("2026-11-01T12:00:00Z", "2026-10-26", "2026-11-01", 12)]
+    [InlineData("2027-01-01T12:00:00Z", "2026-12-26", "2027-01-01", 12)]
+    [InlineData("2028-03-01T12:00:00Z", "2028-02-24", "2028-03-01", 12)]
+    [InlineData("2026-10-28T00:30:00+01:00", "2026-10-21", "2026-10-27", 23.5)]
+    public void DailyWindowIncludesTodayAndSixPreviousUtcDates(string at, string first, string last, double todaySpend)
+    {
+        var clock = DateTimeOffset.Parse(at);
+        Seed(8, at: clock);
+        var result = new CodexCreditHistory(HistoryPath, () => clock)
+            .Record(Reading(1000, clock), Account).CreditsHistory!;
+        Assert.Equal(7, result.Daily.Count);
+        Assert.Equal(first, result.Daily[0].Date);
+        Assert.Equal(last, result.Daily[^1].Date);
+        Assert.Equal(todaySpend, result.Daily[^1].CreditsSpent);
+        Assert.All(result.Daily.Take(6), day => Assert.Equal(24, day.CreditsSpent));
+    }
+
+    [Fact]
+    public void MidnightStartsAnUnknownTodayRatherThanInventingZeroSpend()
+    {
+        Seed(8);
+        var clock = new DateTimeOffset(2026, 10, 10, 0, 0, 0, TimeSpan.Zero);
+        var result = new CodexCreditHistory(HistoryPath, () => clock)
+            .Record(Reading(988, clock), Account).CreditsHistory!;
+        Assert.Equal("2026-10-04", result.Daily[0].Date);
+        Assert.Equal("2026-10-10", result.Daily[^1].Date);
+        Assert.Null(result.Daily[^1].CreditsSpent);
+        Assert.Equal(24, result.Daily[^2].CreditsSpent);
     }
 
     [Theory]
@@ -141,6 +201,7 @@ public sealed class CodexCreditHistoryTests : IDisposable
         var result = new CodexCreditHistory(HistoryPath, () => Now).Record(data, Account).CreditsHistory!;
         Assert.Equal("uncertain", result.Last24Hours.Status);
         Assert.Null(result.Last24Hours.EstimatedDaysLeft);
+        Assert.Null(result.Daily[^1].CreditsSpent);
     }
 
     [Fact]

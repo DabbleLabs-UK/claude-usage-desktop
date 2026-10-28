@@ -33,7 +33,7 @@
   "codex_credits": {
     "source": "Uses the existing authenticated Codex usage poll; adds no external API calls or prompt collection.",
     "storage": "Keeps at most eight days and 5000 timestamped credit-balance samples in the local usage-log/codex-credits.json file. A SHA-256 account identifier separates histories; raw account IDs and credentials are not saved in this file or sent to browsers.",
-    "derived": "Calculates approximate observed balance decreases, 24-hour and seven-day spending rates, estimated days remaining and seven completed UTC daily totals. Grants, corrections, missing observations and expiry can limit the estimates.",
+    "derived": "Calculates approximate observed balance decreases, 24-hour and seven-day spending rates, estimated days remaining and daily totals for today plus the previous six UTC dates. Today's total is day-to-date as of the last reading, not a full-day projection. Grants, corrections, missing observations and expiry can limit the estimates.",
     "sharing": "The existing desktop/LAN usage response includes credit balance, calculated estimates, daily totals and freshness; no new cloud upload.",
     "deletion": "The existing Clear data usage-logs option removes the credit history with the other usage logs."
   },

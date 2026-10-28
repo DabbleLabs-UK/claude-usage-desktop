@@ -179,7 +179,7 @@ documented in `docs/data-handling.json`.
 ## Features
 
 - **Rearrange cards** -- use the up/down icon in the bottom toolbar, then drag a handle or use a card's arrow buttons. Choose Done when finished. Positions save automatically on the desktop host and are used by the phone view too. Provider names stay with their cards.
-- **Codex credits** -- credit balance, approximate days remaining at the last 24-hour and seven-day spending rates, and seven completed UTC days of observed credit spending. Estimates need sufficient history and pause for stale or uncertain readings; zero spending does not imply infinite credits. Balance changes may also include grants, expiry or corrections, so these are estimates rather than a billing ledger. History stays locally with the usage logs and is separated when the Codex account changes.
+- **Codex credits** -- credit balance, approximate days remaining at the last 24-hour and seven-day spending rates, and observed credit spending for today plus the previous six UTC dates. Today's spending is day-to-date as of the last reading, not a full-day projection. Estimates need sufficient history and pause for stale or uncertain readings; zero spending does not imply infinite credits. Balance changes may also include grants, expiry or corrections, so these are estimates rather than a billing ledger. History stays locally with the usage logs and is separated when the Codex account changes.
 - **Session bar** -- 5-hour rolling window usage and projection
 - **Weekly bar** -- 7-day window usage and projection
 - **Sonnet and Opus bars** -- per-model weekly usage and projections

@@ -91,10 +91,15 @@ public sealed class CodexCreditHistory
     {
         var daily = new List<CodexCreditDay>();
         var today = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
-        for (var day = -7; day < 0; day++)
+        for (var day = -6; day <= 0; day++)
         {
             var start = today.AddDays(day);
-            var pace = Calculate(start, start.AddDays(1), balance, false);
+            // Today's total stops at the last observation, not the slightly later processing
+            // clock. Never extrapolate that gap or require an observation from the future.
+            var end = day == 0 && _history.Samples.Count > 0 ? _history.Samples[^1].At
+                : start.AddDays(1);
+            if (end < start) end = start;
+            var pace = Calculate(start, end, balance, false);
             daily.Add(new CodexCreditDay(start.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 pace.Status is "estimated" or "noSpend" ? pace.CreditsSpent : null));
         }

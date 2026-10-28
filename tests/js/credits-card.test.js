@@ -1,7 +1,8 @@
 'use strict';
 
 const assert = require('assert');
-const { render } = require('../../wwwroot/credits-card.js');
+const { render: renderCard } = require('../../wwwroot/credits-card.js');
+const render = (sample, now = new Date('2026-10-09T12:00:00Z')) => renderCard(sample, now);
 
 function data(overrides) {
   return Object.assign({
@@ -55,12 +56,52 @@ test('collecting, no spend and uncertain states explain why there is no forecast
   }
 });
 
-test('seven completed UTC days distinguish zero spend from missing history', () => {
+test('today and six previous UTC days distinguish zero spend from missing history', () => {
   const html = render(data());
   assert.strictEqual((html.match(/role="listitem"/g) || []).length, 7);
   assert(html.includes('2026-10-07: 0 credits spent'));
-  assert(html.includes('2026-10-02: incomplete or uncertain history'));
-  assert(!html.includes('2026-10-09:'));
+  assert(html.includes('2026-10-03: incomplete or uncertain history'));
+  assert(html.includes('2026-10-09: incomplete or uncertain history'));
+  assert(!html.includes('2026-10-02:'));
+});
+
+test('28 October chart includes the 22nd through the 28th and labels today as spending so far', () => {
+  const sample = data({ fetchedAt: '2026-10-28T16:00:00Z' });
+  sample.creditsHistory.daily = Array.from({ length: 7 }, (_, i) => ({
+    date: '2026-10-' + (22 + i), creditsSpent: i === 6 ? 16 : 24
+  }));
+  const html = render(sample, new Date(sample.fetchedAt));
+  assert.strictEqual((html.match(/role="listitem"/g) || []).length, 7);
+  for (let day = 22; day <= 28; day++) assert(html.includes('2026-10-' + day + ':'));
+  assert(!html.includes('2026-10-21:'));
+  assert(!html.includes('2026-10-29:'));
+  assert(html.includes('2026-10-28: 16 credits spent (so far as of last reading)'));
+  assert(html.includes('Today shows spending so far'));
+});
+
+test('stale readings never keep the calendar on yesterday or invent today spending', () => {
+  const sample = data({ fetchedAt: '2026-10-09T12:00:00Z', isStale: true });
+  sample.creditsHistory.daily.push({ date: '2026-10-09', creditsSpent: 12 });
+  const html = render(sample, new Date('2026-10-10T00:05:00Z'));
+  assert.strictEqual((html.match(/role="listitem"/g) || []).length, 7);
+  assert(html.includes('2026-10-04:'));
+  assert(html.includes('2026-10-10: incomplete or uncertain history'));
+  assert(html.includes('2026-10-09: 12 credits spent (so far as of last reading)'));
+  assert(!html.includes('2026-10-03:'));
+});
+
+test('UTC calendar windows cross month, year and leap-day boundaries correctly', () => {
+  for (const [at, first, last] of [
+    ['2026-11-01T12:00:00Z', '2026-10-26', '2026-11-01'],
+    ['2027-01-01T12:00:00Z', '2026-12-26', '2027-01-01'],
+    ['2028-03-01T12:00:00Z', '2028-02-24', '2028-03-01'],
+    ['2026-10-28T00:30:00+01:00', '2026-10-21', '2026-10-27']
+  ]) {
+    const html = render(data({ fetchedAt: at }), new Date(at));
+    assert.strictEqual((html.match(/role="listitem"/g) || []).length, 7);
+    assert(html.includes(first + ':'));
+    assert(html.includes(last + ':'));
+  }
 });
 
 test('duplicate days do not imply known spend', () => {
