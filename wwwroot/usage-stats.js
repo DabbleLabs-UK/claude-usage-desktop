@@ -23,6 +23,16 @@
   function format(value) {
     return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
   }
+  function axisMaximum(observedMaximum) {
+    // Keep two equal intervals, using steps readable at the label's precision.
+    const requiredStep = Math.max(0.1, observedMaximum / 2);
+    const magnitude = Math.pow(10, Math.floor(Math.log10(requiredStep)));
+    const step = [1, 2, 2.5, 5, 10].map(value => value * magnitude)
+      .find(value => value >= requiredStep && value >= 0.1
+        && (value >= 1 || Math.abs(value * 10 - Math.round(value * 10)) < 0.000001));
+    // Only the numeric representation limit can prevent a rounded upper bound.
+    return Math.min(Number.MAX_VALUE, step * 2);
+  }
   function period(from, to, latest) {
     const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' };
     return (latest ? 'Latest: ' : 'Historical: ') + new Date(from).toLocaleString(undefined, options)
@@ -43,7 +53,7 @@
         .filter(p => Number.isFinite(p.ms) && p.ms >= from && p.ms <= to)
         .sort((a, b) => a.ms - b.ms);
       return { label: s && typeof s.label === 'string' ? s.label : 'Usage window', points,
-        max: points.reduce((max, p) => Math.max(max, p.v), 0), color: COLORS[index % COLORS.length] };
+        max: axisMaximum(points.reduce((max, p) => Math.max(max, p.v), 0)), color: COLORS[index % COLORS.length] };
     });
     if (!series.some(s => s.points.length)) {
       if (!options.latest) return note('No recorded data in this period.');
@@ -101,7 +111,7 @@
       + (s.points.length ? escape(format(s.points[s.points.length - 1].v)) + ' pp' : 'no samples')
       + (series.length <= 2 ? (index === 0 ? ' (left axis)' : ' (right axis)') : '') + '</span></span>').join('') + '</div>';
     return svg + legend + (!connected ? note('Isolated samples only; not enough continuous data to draw a line.') : '')
-      + (series.length > 2 ? note('Axis fractions refer to each line\'s own observed maximum. Legend totals are percentage points (pp).') : '');
+      + (series.length > 2 ? note('Axis fractions refer to each line\'s own rounded axis maximum. Legend totals are percentage points (pp).') : '');
   }
 
   function createController(options) {

@@ -64,6 +64,9 @@ percentage. The values are percentage points of that quota, rather than tokens,
 money or a percentage of the graph's selected time span. Each line has its own
 vertical scale, so equal heights do not mean equal consumption. Reset drops do
 not subtract usage, and unobserved activity cannot be reconstructed.
+Horizontal gridlines use equal, rounded steps (for example 0, 500, 1000), with
+each line's scale extended to fit its observed values. Legend totals stay exact
+to the displayed precision; they are not rounded to the gridline steps.
 
 Claude uses the existing local usage log. Codex records successful quota readings
 from the existing poll, with separate lines for the actual window durations

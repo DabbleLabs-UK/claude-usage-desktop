@@ -266,6 +266,53 @@ test('zero observed increases draw zero-valued samples without inventing missing
   assert.match(rendered, /points="336.6,174.0 336.8,174.0 336.8,174.0"/);
 });
 
+test('numeric gridlines use rounded equal steps and coordinates use the same independent scales', () => {
+  const from = ANCHOR - 86400000;
+  const rendered = stats.renderChart(data(from, ANCHOR, [
+    { label: 'Session', points: [point(from, 0), point(from + 60000, 842)] },
+    { label: 'Weekly', points: [point(from, 0), point(from + 60000, 42.1)] }
+  ]));
+  const labels = [...rendered.matchAll(/<text[^>]*>([^<]+)<\/text>/g)].map(match => match[1]);
+  assert.deepEqual(labels.filter((value, index) => index % 3 !== 2), ['0', '0', '500', '25', '1,000', '50']);
+  assert.match(rendered, /points="43.0,174.0 43.2,174.0 43.2,37.6"/);
+  assert.equal((rendered.match(/43.2,37.6/g) || []).length, 2);
+  assert.match(rendered, /Session: 842 pp/);
+  assert.match(rendered, /Weekly: 42.1 pp/);
+});
+
+test('rounded scales preserve exact boundaries, small values and readable one-decimal steps', () => {
+  const from = ANCHOR - 86400000;
+  for (const [maximum, middle, upper] of [[1000, '500', '1,000'], [0.01, '0.1', '0.2'],
+    [0.4, '0.2', '0.4'], [0.45, '0.5', '1'], [5000, '2,500', '5,000'], [0, '0.1', '0.2']]) {
+    const rendered = stats.renderChart(data(from, ANCHOR, [{ label: 'Quota', points: [point(from, maximum)] }]));
+    const labels = [...rendered.matchAll(/<text[^>]*>([^<]+)<\/text>/g)].map(match => match[1]);
+    assert.equal(labels[2], middle, String(maximum));
+    assert.equal(labels[4], upper, String(maximum));
+    assert.doesNotMatch(rendered, /NaN|Infinity/);
+  }
+});
+
+test('fraction labels explain rounded independent scales without changing observed totals', () => {
+  const from = ANCHOR - 86400000;
+  const rendered = stats.renderChart(data(from, ANCHOR, [42.1, 842, 4210].map((value, index) => ({
+    label: 'Window ' + index, points: [point(from, value)]
+  }))));
+  assert.match(rendered, /own rounded axis maximum/);
+  assert.doesNotMatch(rendered, /own observed maximum/);
+  assert.match(rendered, /42.1 pp/);
+  assert.match(rendered, /842 pp/);
+  assert.match(rendered, /4,210 pp/);
+});
+
+test('extreme finite observations do not overflow the axis or plotted coordinates', () => {
+  const from = ANCHOR - 86400000;
+  const rendered = stats.renderChart(data(from, ANCHOR, [{ label: 'Quota', points: [
+    point(from, 0), point(from + 60000, Number.MAX_VALUE)
+  ] }]));
+  assert.doesNotMatch(rendered, /NaN|Infinity/);
+  assert.match(rendered, /points="43.0,174.0 43.2,174.0 43.2,12.0"/);
+});
+
 test('Stats adapter preserves main/back navigation and parses alongside all existing inline scripts', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../../wwwroot/index.html'), 'utf8');
   const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(match => match[1]).filter(Boolean);
