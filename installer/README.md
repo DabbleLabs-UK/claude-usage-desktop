@@ -16,7 +16,9 @@ produces a GUI installer; it cannot be built or run in the VM/Linux shell.
 ## What it packages
 
 The published `dist\` payload — the self-contained single-file `ClaudeUsage.exe`,
-the loose native DLLs, the WebView2 `.xml` docs, and `wwwroot\`. It **excludes**
+the loose native DLLs, the WebView2 `.xml` docs, `wwwroot\`, and the relay startup
+and OpenRouter exporter/sync helpers in `tools\`. The helpers are packaged but
+not executed or configured by installation. It **excludes**
 the same cruft as the release zip: the runtime `ClaudeUsage.exe.WebView2\`
 profile dir, `_pkg\`, the empty single-file locale dirs (`cs\ de\ es\ …`),
 `*.pdb`, `*.old* / *.bak* / *.stuck* / *.prev* / *_old.exe`, old `*.zip`
@@ -39,7 +41,7 @@ $shipped = 'ClaudeUsage.exe','aspnetcorev2_inprocess.dll','D3DCompiler_47_cor3.d
   'PenImc_cor3.dll','PresentationNative_cor3.dll','vcruntime140_cor3.dll',
   'WebView2Loader.dll','wpfgfx_cor3.dll','Microsoft.Web.WebView2.Core.xml',
   'Microsoft.Web.WebView2.WinForms.xml','Microsoft.Web.WebView2.Wpf.xml',
-  'runtimes','wwwroot'
+  'runtimes','wwwroot','tools'
 Get-ChildItem dist | Where-Object {
   $_.Name -notin $shipped -and
   $_.Name -notmatch '\.(old|bak|stuck|prev|pdb|zip)|\.WebView2$|^_pkg$|^\.|^RELEASE_NOTES|_old\.exe$' -and

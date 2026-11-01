@@ -36,6 +36,8 @@
 ;    Microsoft.Web.WebView2.Core.xml / .WinForms.xml / .Wpf.xml   (WebView2 docs)
 ;    runtimes\win-x64\native\WebView2Loader.dll
 ;    wwwroot\favicon.ico, index.html, logo_dabblelabs.png
+;    tools\install-relay-startup.ps1, install-openrouter-spend-sync.ps1,
+;          sync-openrouter-spend.ps1, openrouter-spend-export.py
 ;
 ;  Deliberately EXCLUDED (same as the release zip):
 ;    ClaudeUsage.exe.WebView2\  (runtime profile dir) , _pkg\ , the empty
@@ -171,6 +173,9 @@ Section "${APP_NAME} (required)" SEC_CORE
   File "${DIST_DIR}\wwwroot\logo_dabblelabs.png"
   SetOutPath "$INSTDIR\tools"
   File "${DIST_DIR}\tools\install-relay-startup.ps1"
+  File "${DIST_DIR}\tools\install-openrouter-spend-sync.ps1"
+  File "${DIST_DIR}\tools\sync-openrouter-spend.ps1"
+  File "${DIST_DIR}\tools\openrouter-spend-export.py"
 
   ; --- Start Menu shortcut (working dir = install dir) -----------------------
   SetOutPath "$INSTDIR"
@@ -261,6 +266,9 @@ Section "Uninstall"
   Delete "$INSTDIR\wwwroot\provider-status.js"
   Delete "$INSTDIR\wwwroot\logo_dabblelabs.png"
   Delete "$INSTDIR\tools\install-relay-startup.ps1"
+  Delete "$INSTDIR\tools\install-openrouter-spend-sync.ps1"
+  Delete "$INSTDIR\tools\sync-openrouter-spend.ps1"
+  Delete "$INSTDIR\tools\openrouter-spend-export.py"
   RMDir "$INSTDIR\tools"
   Delete "$INSTDIR\runtimes\win-x64\native\WebView2Loader.dll"
   Delete "$INSTDIR\Uninstall.exe"
